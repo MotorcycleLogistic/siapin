@@ -2,7 +2,7 @@ import { TruckRecord } from '../types';
 import { getAccessToken } from './googleAuth';
 
 export const DEFAULT_SPREADSHEET_ID = '17Kjn7YSBjt6p3FaNTofmqtfjAl2DjekO';
-export const DEFAULT_SHEET_NAME = 'MD to Dealer';
+export const DEFAULT_SHEET_NAME = 'MD to Dealer 2';
 
 const STORAGE_KEYS = {
   SPREADSHEET_ID: 'fleet_google_spreadsheet_id',

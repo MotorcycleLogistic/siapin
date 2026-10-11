@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "TransporterBinding": {
+      "title": "TransporterBinding",
+      "description": "Pengikatan resmi akun Google Transporter ke satu Transporter dan Depo tertentu",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Alamat email Google pengguna dalam huruf kecil"
+        },
+        "googleUid": {
+          "type": "string",
+          "description": "Firebase Auth UID akun Google"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Nama tampilan profil Google"
+        },
+        "kodeTransporter": {
+          "type": "string",
+          "description": "Kode transporter (TM, RJTM, WSS, SBR)"
+        },
+        "namaTransporter": {
+          "type": "string",
+          "description": "Nama lengkap transporter"
+        },
+        "depo": {
+          "type": "string",
+          "description": "Depo operasional (Karawang, Baros, Cirebon)"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Waktu pendaftaran akun pertama kali"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Waktu pembaruan atau login terakhir"
+        }
+      },
+      "required": [
+        "email",
+        "kodeTransporter",
+        "namaTransporter",
+        "depo"
+      ]
+    },
+    "DailySnapshot": {
+      "title": "DailySnapshot",
+      "description": "Snapshot data kesiapan armada harian",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Format YYYY-MM-DD"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO timestamp waktu snapshot disimpan"
+        },
+        "trucks": {
+          "type": "array",
+          "description": "Daftar armada beserta status kesiapan"
+        }
+      },
+      "required": [
+        "date",
+        "timestamp"
+      ]
+    }
+  },
+  "firestore": {
+    "/transporter_bindings/{email}": {
+      "schema": "TransporterBinding",
+      "description": "Menyimpan relasi eksklusif email Google ke satu kode transporter dan depo"
+    },
+    "/daily_snapshots/{date}": {
+      "schema": "DailySnapshot",
+      "description": "Menyimpan snapshot kesiapan armada per tanggal"
+    }
+  }
+}

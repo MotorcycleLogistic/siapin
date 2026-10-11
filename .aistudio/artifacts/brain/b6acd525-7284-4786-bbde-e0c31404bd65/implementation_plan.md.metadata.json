@@ -1,0 +1,6 @@
+{
+  "summary":  "Rencana komprehensif integrasi Google Account Picker resmi (menampilkan daftar akun di HP/browser), pengikatan permanen akun Google ke Transporter & Depo pada Cloud Firestore, serta mekanisme penolakan ketat jika akun digunakan untuk transporter atau depo yang berbeda.",
+  "updatedAt":  "2026-10-11T11:17:20.006276994Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

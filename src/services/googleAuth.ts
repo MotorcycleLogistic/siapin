@@ -50,14 +50,18 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Gagal mendapatkan token akses dari Google Auth');
-    }
-
-    const token = credential.accessToken;
+    const token = credential?.accessToken || '';
     cachedAccessToken = token;
     return { user: result.user, accessToken: token };
   } catch (error: any) {
+    if (
+      error.code === 'auth/popup-closed-by-user' ||
+      error.code === 'auth/cancelled-popup-request' ||
+      error.code === 'auth/user-cancelled'
+    ) {
+      console.info('Google popup ditutup oleh pengguna.');
+      return null;
+    }
     console.error('Google Sign in error:', error);
     throw error;
   } finally {

@@ -178,32 +178,6 @@ export const AdminAnalyticsReport: React.FC<AdminAnalyticsReportProps> = ({ truc
       });
     });
 
-    // Tambahkan armada dari snapshots database yang mungkin belum ada di live
-    Object.values(snapshotsMap).forEach((snap) => {
-      if (Array.isArray(snap.trucks)) {
-        snap.trucks.forEach((t) => {
-          const plat = (t.nomorPolisi || '').trim();
-          if (!plat) return;
-          // Filter out dummy/mock trucks
-          if (t.id && t.id.startsWith('TRK-')) return;
-
-          if (!trucksMap.has(plat)) {
-            trucksMap.set(plat, {
-              nomorPolisi: plat,
-              transporter: t.transporter,
-              depo: t.depo || 'Karawang',
-              namaSopir: t.namaSopir || '',
-              kapasitas: t.kapasitas || '28',
-              status: t.status || 'Aktif',
-              days: {},
-              readyCount: 0,
-              recordedDaysCount: 0,
-              percentage: null as number | null,
-            });
-          }
-        });
-      }
-    });
 
     // Evaluasi status setiap truk untuk setiap tanggal dalam rentang murni dari database
     trucksMap.forEach((truckObj, plat) => {

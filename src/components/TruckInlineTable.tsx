@@ -3,6 +3,7 @@ import { TruckRecord, TruckStatus, ReadinessStatus, SaveStatus } from '../types'
 import { FloatingBatchFooter } from './FloatingBatchFooter';
 import { EmptyStateTrucks } from './EmptyStateTrucks';
 import { formatWIBDateIndo, isConfirmedToday } from '../utils/timeUtils';
+import { resolveOperationalKeterangan } from '../utils/keteranganUtils';
 
 interface TruckInlineTableProps {
   trucks: TruckRecord[];
@@ -77,6 +78,12 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
     if (!floatingNoteTruck) return;
     const noteText = floatingNoteText.trim();
     const newReadiness: ReadinessStatus = 'Tidak Ready';
+    const autoKeterangan = resolveOperationalKeterangan({
+      action: 'set_readiness',
+      prevTruck: floatingNoteTruck,
+      newKesiapan: newReadiness,
+      customNote: noteText,
+    });
 
     setRowStates((prev) => ({
       ...prev,
@@ -90,13 +97,13 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
           saveStatus: 'idle',
         }),
         kesiapan: newReadiness,
-        keterangan: noteText,
+        keterangan: autoKeterangan,
       },
     }));
 
     triggerSave(floatingNoteTruck.id, {
       kesiapan: newReadiness,
-      keterangan: noteText,
+      keterangan: autoKeterangan,
     });
 
     setIsNoteModalInEditMode(false);
@@ -151,19 +158,32 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
     const cleanSopir = editDraft.namaSopir.trim().toUpperCase();
     const cleanKap = editDraft.kapasitas.replace(/\D/g, '') || '28';
 
+    const currentRow = rowStates[editingTruck.id] || {
+      status: editingTruck.status,
+      kesiapan: editingTruck.kesiapan || 'Ready',
+      keterangan: editingTruck.keterangan || '',
+      depo: editingTruck.depo || 'Karawang',
+      saveStatus: 'idle',
+    };
+
+    const autoKeterangan = resolveOperationalKeterangan({
+      action: 'edit_row',
+      prevTruck: editingTruck,
+      newNopol: cleanNopol,
+      newSopir: cleanSopir,
+      newStatus: currentRow.status,
+      newKesiapan: currentRow.kesiapan,
+      customNote: currentRow.keterangan,
+    });
+
     setRowStates((prev) => ({
       ...prev,
       [editingTruck.id]: {
-        ...(prev[editingTruck.id] || {
-          status: editingTruck.status,
-          kesiapan: editingTruck.kesiapan || 'Ready',
-          keterangan: editingTruck.keterangan || '',
-          depo: editingTruck.depo || 'Karawang',
-          saveStatus: 'idle',
-        }),
+        ...currentRow,
         nomorPolisi: cleanNopol,
         namaSopir: cleanSopir,
         kapasitas: cleanKap,
+        keterangan: autoKeterangan,
       },
     }));
 
@@ -171,6 +191,7 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
       nomorPolisi: cleanNopol,
       namaSopir: cleanSopir,
       kapasitas: cleanKap,
+      keterangan: autoKeterangan,
     });
 
     setEditingTruck(null);
@@ -398,9 +419,16 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
     if (isLocked) return;
     const currentStatus = rowStates[truckId]?.status || 'Aktif';
     const newStatus: TruckStatus = currentStatus === 'Aktif' ? 'Nonaktif' : 'Aktif';
-    // ATURAN 1: Ketika dikembalikan menjadi Aktif -> Kesiapan otomatis Ready & keterangan kosong
+    // ATURAN: Ketika dikembalikan menjadi Aktif -> Kesiapan otomatis Ready & keterangan kosong
     const newReadiness: ReadinessStatus = newStatus === 'Nonaktif' ? 'Tidak Ready' : 'Ready';
-    const newKeterangan = newReadiness === 'Ready' ? '' : (rowStates[truckId]?.keterangan || '');
+    const targetTruck = trucks.find((t) => t.id === truckId);
+    const newKeterangan = resolveOperationalKeterangan({
+      action: 'toggle_status',
+      prevTruck: targetTruck,
+      newStatus,
+      newKesiapan: newReadiness,
+      customNote: rowStates[truckId]?.keterangan,
+    });
 
     setRowStates((prev) => ({
       ...prev,
@@ -473,11 +501,13 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
     if (isLocked || selectedIds.size === 0) return;
     setIsBulkUpdating(true);
     const ids = Array.from(selectedIds);
+    const readiness: ReadinessStatus = status === 'Nonaktif' ? 'Tidak Ready' : 'Ready';
+    const autoKeterangan = status === 'Nonaktif' ? '[Nonaktif]' : '';
     if (onBulkStatusChange) {
       await onBulkStatusChange(ids, status);
     } else {
       for (const id of ids) {
-        await triggerSave(id, { status });
+        await triggerSave(id, { status, kesiapan: readiness, keterangan: autoKeterangan });
       }
     }
     setIsBulkUpdating(false);
@@ -488,11 +518,12 @@ export const TruckInlineTable: React.FC<TruckInlineTableProps> = ({
     if (isLocked || selectedIds.size === 0) return;
     setIsBulkUpdating(true);
     const ids = Array.from(selectedIds);
+    const autoKeterangan = readiness === 'Ready' ? '' : '[Tidak Ready]';
     if (onBulkReadinessChange) {
       await onBulkReadinessChange(ids, readiness);
     } else {
       for (const id of ids) {
-        await triggerSave(id, { kesiapan: readiness });
+        await triggerSave(id, { kesiapan: readiness, keterangan: autoKeterangan });
       }
     }
     setIsBulkUpdating(false);

@@ -1,6 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Pengikatan resmi akun Google Transporter ke satu Transporter dan Depo
+    match /transporter_bindings/{email} {
+      allow read, write: if true;
+    }
+    
     // Daily snapshots of truck fleet readiness
     match /daily_snapshots/{date} {
       allow read, write: if true;

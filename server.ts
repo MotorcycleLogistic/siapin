@@ -16,6 +16,12 @@ if (!fs.existsSync(SNAPSHOTS_DIR)) {
   fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 }
 
+// Database Directory for Persistent Transporter Google Bindings
+const BINDINGS_DIR = path.join(__dirname, 'data', 'bindings');
+if (!fs.existsSync(BINDINGS_DIR)) {
+  fs.mkdirSync(BINDINGS_DIR, { recursive: true });
+}
+
 // Cloud Firestore Database Instance for Cloud Daily Snapshots
 let firestoreDb: any = null;
 try {
@@ -405,6 +411,157 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
   });
 });
 
+// Transporter Google Account Binding in Cloud Firestore & Local Backup
+async function getBindingFromStorage(cleanEmail: string) {
+  if (!cleanEmail) return null;
+  // 1. Try Cloud Firestore
+  if (firestoreDb) {
+    try {
+      const { doc, getDoc } = await import('firebase/firestore');
+      const ref = doc(firestoreDb, 'transporter_bindings', cleanEmail);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        return snap.data();
+      }
+    } catch (e: any) {
+      console.warn('Firestore get binding error:', e.message);
+    }
+  }
+
+  // 2. Fallback to local storage file
+  const localFile = path.join(BINDINGS_DIR, `${encodeURIComponent(cleanEmail)}.json`);
+  if (fs.existsSync(localFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(localFile, 'utf-8'));
+    } catch {}
+  }
+  return null;
+}
+
+async function saveBindingToStorage(binding: any) {
+  const cleanEmail = String(binding.email || '').trim().toLowerCase();
+  if (!cleanEmail) return;
+
+  // 1. Save to local storage file
+  const localFile = path.join(BINDINGS_DIR, `${encodeURIComponent(cleanEmail)}.json`);
+  fs.writeFileSync(localFile, JSON.stringify(binding, null, 2), 'utf-8');
+
+  // 2. Save to Cloud Firestore
+  if (firestoreDb) {
+    try {
+      const { doc, setDoc } = await import('firebase/firestore');
+      const ref = doc(firestoreDb, 'transporter_bindings', cleanEmail);
+      await setDoc(ref, binding, { merge: true });
+    } catch (e: any) {
+      console.warn('Firestore save binding error:', e.message);
+    }
+  }
+}
+
+// Check transporter binding endpoint
+app.get('/api/transporter-binding/:email', async (req: Request, res: Response) => {
+  const email = String(req.params.email || '').trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email tidak valid' });
+  }
+
+  const existing = await getBindingFromStorage(email);
+  return res.json({
+    success: true,
+    binding: existing || null,
+  });
+});
+
+// Save or validate transporter binding endpoint
+app.post('/api/transporter-binding', async (req: Request, res: Response) => {
+  const { email, googleUid, displayName, kodeTransporter, namaTransporter, depo } = req.body;
+  const cleanEmail = String(email || '').trim().toLowerCase();
+
+  if (!cleanEmail || !kodeTransporter || !depo) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email, Kode Transporter, dan Depo wajib diisi',
+    });
+  }
+
+  const existing = await getBindingFromStorage(cleanEmail);
+
+  // STRICT REJECTION: Jika akun sudah pernah terdaftar untuk transporter atau depo lain
+  if (existing) {
+    const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
+    const existingDepo = String(existing.depo || '').trim().toLowerCase();
+    const targetTrans = String(kodeTransporter).trim().toUpperCase();
+    const targetDepo = String(depo).trim().toLowerCase();
+
+    if (existingTrans !== targetTrans || existingDepo !== targetDepo) {
+      return res.status(403).json({
+        success: false,
+        rejected: true,
+        existingBinding: existing,
+        message: `Akun Google ${cleanEmail} telah terdaftar dan terkunci untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Anda tidak diizinkan menggunakan akun ini untuk Transporter atau Depo lain.`,
+      });
+    }
+  }
+
+  const now = new Date().toISOString();
+  const bindingData = {
+    email: cleanEmail,
+    googleUid: googleUid || existing?.googleUid || '',
+    displayName: displayName || existing?.displayName || '',
+    kodeTransporter: String(kodeTransporter).trim().toUpperCase(),
+    namaTransporter: namaTransporter || getAppSheetTransporterName(kodeTransporter),
+    depo: String(depo).trim(),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+
+  await saveBindingToStorage(bindingData);
+
+  return res.json({
+    success: true,
+    binding: bindingData,
+    message: `Akun Google berhasil dihubungkan dan dikunci untuk ${bindingData.namaTransporter} (${bindingData.depo})`,
+  });
+});
+
+// Check access permission without modifying
+app.post('/api/transporter-binding/check', async (req: Request, res: Response) => {
+  const { email, kodeTransporter, depo } = req.body;
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail) {
+    return res.status(400).json({ success: false, message: 'Email tidak valid' });
+  }
+
+  const existing = await getBindingFromStorage(cleanEmail);
+  if (!existing) {
+    return res.json({
+      allowed: true,
+      isNew: true,
+      binding: null,
+    });
+  }
+
+  const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
+  const existingDepo = String(existing.depo || '').trim().toLowerCase();
+  const targetTrans = String(kodeTransporter || '').trim().toUpperCase();
+  const targetDepo = String(depo || '').trim().toLowerCase();
+
+  if (targetTrans && targetDepo && (existingTrans !== targetTrans || existingDepo !== targetDepo)) {
+    return res.json({
+      allowed: false,
+      isNew: false,
+      existingBinding: existing,
+      message: `Akun Google ${cleanEmail} telah terdaftar untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Penolakan akses untuk Transporter atau Depo lain.`,
+    });
+  }
+
+  return res.json({
+    allowed: true,
+    isNew: false,
+    existingBinding: existing,
+  });
+});
+
 // 1. Status Check
 app.get('/api/appsheet/status', (_req: Request, res: Response) => {
   res.json({
@@ -437,7 +594,9 @@ app.get('/api/appsheet/trucks', async (req: Request, res: Response) => {
           tableName: currentTableName,
         });
       }
-      currentTableName = cleanParam;
+      currentTableName = (cleanParam === 'MD to Dealer') ? 'MD to Dealer 2' : cleanParam;
+    } else {
+      currentTableName = 'MD to Dealer 2';
     }
 
     const rawRows = await callAppSheetApi('Find', [], currentTableName);
@@ -1215,7 +1374,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);

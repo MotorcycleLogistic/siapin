@@ -148,18 +148,33 @@ export default function App() {
   const [depoFilter, setDepoFilter] = useState<'ALL' | 'Karawang' | 'Baros' | 'Cirebon'>('ALL');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState<string>('ALL');
 
-  // Floating Toast state
+  // Floating Toast & Centered Notification state
   const [toast, setToast] = useState<{
     message: string;
     type: 'success' | 'error' | 'info';
+    isCentered?: boolean;
+    title?: string;
   } | null>(null);
 
-  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast((current) => (current?.message === message ? null : current));
-    }, 3500);
-  }, []);
+  const showToast = useCallback(
+    (
+      message: string,
+      type: 'success' | 'error' | 'info' = 'success',
+      options?: { isCentered?: boolean; title?: string }
+    ) => {
+      setToast({
+        message,
+        type,
+        isCentered: options?.isCentered,
+        title: options?.title,
+      });
+      const duration = options?.isCentered ? 2500 : 3500;
+      setTimeout(() => {
+        setToast((current) => (current?.message === message ? null : current));
+      }, duration);
+    },
+    []
+  );
 
   // Smooth White Floating Update Modal: Loading -> Success -> Redirect to WhatsApp
   const [floatingUpdateModal, setFloatingUpdateModal] = useState<{
@@ -192,7 +207,7 @@ export default function App() {
   }, []);
 
   // Handler to fetch trucks from AppSheet REST API
-  const handleSyncAppSheet = useCallback(async (customTableName?: string): Promise<{
+  const handleSyncAppSheet = useCallback(async (customTableName?: string, isSilent: boolean = false): Promise<{
     success: boolean;
     message?: string;
     isApiDisabled?: boolean;
@@ -216,7 +231,13 @@ export default function App() {
         saveLocalTrucks(res.trucks);
         setAppSheetApiDisabled(false);
         setAppSheetTableNotFound(false);
-        showToast(`Berhasil memuat ${res.trucks.length} unit armada dari AppSheet (${res.tableName})!`, 'success');
+        if (!isSilent) {
+          showToast(
+            `${res.trucks.length} unit armada berhasil disinkronkan (${res.tableName})`,
+            'success',
+            { isCentered: true, title: 'AppSheet Terhubung' }
+          );
+        }
       } else if (res.isTableNotFound) {
         setAppSheetTableNotFound(true);
       } else if (res.isApiDisabled) {
@@ -233,6 +254,34 @@ export default function App() {
     if (syncMode === 'appsheet') {
       handleSyncAppSheet();
     }
+  }, [syncMode, handleSyncAppSheet]);
+
+  // Auto-sync berkala (setiap 30 detik) dan saat window/tab kembali aktif (focus)
+  // Menjamin jika ada penambahan atau pengurangan armada di AppSheet / Spreadsheet,
+  // data langsung termuat dan terbarui otomatis di aplikasi SIAPIN.
+  useEffect(() => {
+    if (syncMode !== 'appsheet') return;
+
+    // Polling silent setiap 30 detik untuk deteksi penambahan/pengurangan di spreadsheet
+    const interval = setInterval(() => {
+      handleSyncAppSheet(undefined, true);
+    }, 30000);
+
+    // Auto-sync saat pengguna kembali ke tab aplikasi setelah mengedit di spreadsheet
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        handleSyncAppSheet(undefined, true);
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+    };
   }, [syncMode, handleSyncAppSheet]);
 
   // Check URL query parameter `?t=...` on mount and popstate
@@ -655,7 +704,9 @@ export default function App() {
     });
 
     if (syncMode === 'appsheet') {
-      sendAppSheetAction('addTruck', { truck: newTruck });
+      sendAppSheetAction('addTruck', { truck: newTruck }).then(() => {
+        handleSyncAppSheet(undefined, true);
+      });
     }
 
     showToast(`Armada baru ${newTruck.nomorPolisi} berhasil didaftarkan`, 'success');
@@ -676,6 +727,7 @@ export default function App() {
     if (syncMode === 'appsheet') {
       const target = trucks.find((t) => t.id === truckId);
       await sendAppSheetAction('deleteTruck', { truckId, nomorPolisi: target?.nomorPolisi });
+      handleSyncAppSheet(undefined, true);
     }
 
     setIsDeleting(false);
@@ -701,6 +753,7 @@ export default function App() {
         const target = trucks.find((t) => t.id === id);
         await sendAppSheetAction('deleteTruck', { truckId: id, nomorPolisi: target?.nomorPolisi });
       }
+      handleSyncAppSheet(undefined, true);
     }
 
     setIsDeleting(false);
@@ -1323,19 +1376,40 @@ export default function App() {
       {/* Floating PWA Install Prompt for Mobile & Desktop */}
       <PWAInstallFloatingModal />
 
-      {/* Toast Notification */}
-      {toast && (
-        <div className="fixed top-3 right-3 z-50 animate-in fade-in duration-200">
+      {/* Toast & Centered Floating Notification */}
+      {toast && toast.isCentered ? (
+        <div className="fixed inset-0 pointer-events-none flex items-center justify-center z-50 px-4">
+          <div className="bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-2xl px-5 py-3.5 flex items-center gap-3.5 max-w-sm w-auto animate-in fade-in zoom-in-95 duration-200 pointer-events-auto">
+            <div className="w-9 h-9 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
+              <svg className="w-5 h-5 fill-none stroke-current" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div className="text-left min-w-0 pr-1">
+              <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight">
+                {toast.title || 'AppSheet Terhubung'}
+              </div>
+              <div className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 truncate">
+                {toast.message}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : toast && (
+        <div className="fixed top-3 right-3 z-50 animate-in fade-in duration-200 pointer-events-none">
           <div
-            className={`px-4 py-2.5 rounded-md shadow-xl text-xs font-bold border ${
+            className={`px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold border flex items-center gap-2 ${
               toast.type === 'success'
-                ? 'bg-emerald-900 text-emerald-100 border-emerald-700'
+                ? 'bg-white text-slate-900 border-slate-200'
                 : toast.type === 'error'
                 ? 'bg-red-900 text-red-100 border-red-700'
                 : 'bg-slate-900 text-white border-slate-700'
             }`}
           >
-            {toast.message}
+            {toast.type === 'success' && (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+            )}
+            <span>{toast.message}</span>
           </div>
         </div>
       )}

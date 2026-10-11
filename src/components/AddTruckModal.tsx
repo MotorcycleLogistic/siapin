@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { TruckRecord, TruckStatus, ReadinessStatus } from '../types';
+import { resolveOperationalKeterangan } from '../utils/keteranganUtils';
 
 interface AddTruckModalProps {
   isOpen: boolean;
@@ -48,6 +49,13 @@ export const AddTruckModal: React.FC<AddTruckModalProps> = ({
       return;
     }
 
+    const finalKeterangan = resolveOperationalKeterangan({
+      action: 'add',
+      newStatus: status,
+      newKesiapan: kesiapan,
+      customNote: keterangan.trim(),
+    });
+
     onAddTruck({
       transporter: activeTransporter === 'ALL' ? transporter : activeTransporter,
       depo,
@@ -56,7 +64,7 @@ export const AddTruckModal: React.FC<AddTruckModalProps> = ({
       kapasitas: cleanKap,
       status,
       kesiapan,
-      keterangan: keterangan.trim(),
+      keterangan: finalKeterangan,
     });
 
     // Reset form

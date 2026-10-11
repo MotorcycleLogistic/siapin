@@ -175,7 +175,13 @@ export function getLocalTrucks(): TruckRecord[] {
       const parsed: TruckRecord[] = JSON.parse(raw);
       // Filter out dummy TRK- trucks if real trucks exist
       const realTrucks = parsed.filter((t) => !t.id?.startsWith('TRK-') && Boolean(t.nomorPolisi));
-      const targetList = realTrucks.length > 0 ? realTrucks : parsed;
+      
+      // Jika data lokal adalah sisa data dummy lama (< 50 truk), gunakan 151 armada riil dari MD to Dealer 2
+      if (realTrucks.length < 50 && INITIAL_TRUCKS.length >= 100) {
+        return INITIAL_TRUCKS;
+      }
+
+      const targetList = realTrucks.length > 0 ? realTrucks : INITIAL_TRUCKS;
 
       // Ensure capacities are numbers only and driver name uses first name only
       const sanitized = targetList.map((t) => {
@@ -512,7 +518,7 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `/**
  */
 
 var SPREADSHEET_ID = "17Kjn7YSBjt6p3FaNTofmqtfjAl2DjekO";
-var SHEET_NAME = "MD to Dealer";
+var SHEET_NAME = "MD to Dealer 2";
 
 function getTargetSpreadsheet() {
   try {

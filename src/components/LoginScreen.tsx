@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { UserRecord, TransporterCode } from '../types';
 import { TRANSPORTER_NAMES } from '../services/mockData';
+import { googleSignIn } from '../services/googleAuth';
+import {
+  getTransporterBinding,
+  checkTransporterBinding,
+  saveTransporterBinding,
+  TransporterBindingRecord,
+} from '../services/transporterAuthService';
+import type { User } from 'firebase/auth';
 
 interface LoginScreenProps {
   onLogin: (user: UserRecord) => void;
@@ -139,6 +147,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [connectedEmail, setConnectedEmail] = useState<string>('');
   const [selectedVendor, setSelectedVendor] = useState<TransporterCode>('TM');
   const [selectedDepo, setSelectedDepo] = useState<string>('Karawang');
+  const [googleUser, setGoogleUser] = useState<User | null>(null);
+  const [regError, setRegError] = useState<string>('');
+
+  // Strict Rejection Modal State
+  const [rejectionModal, setRejectionModal] = useState<{
+    isOpen: boolean;
+    email: string;
+    existingTransporter: string;
+    existingDepo: string;
+    message?: string;
+    existingRecord?: TransporterBindingRecord;
+  }>({
+    isOpen: false,
+    email: '',
+    existingTransporter: '',
+    existingDepo: '',
+  });
 
   // Admin Login States (remember me enabled)
   const [rememberAdmin, setRememberAdmin] = useState<boolean>(() => {
@@ -203,51 +228,134 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  // Official Google Authentication for Phone (ZERO MANUAL TYPING)
-  const handleOfficialGoogleAuth = () => {
+  // Official Google Authentication with Real Account Picker (menampilkan seluruh akun Google di HP/browser)
+  const handleOfficialGoogleAuth = async () => {
     setIsConnectingGoogle(true);
+    setRegError('');
 
-    setTimeout(() => {
-      // Seamlessly resolve the official phone Google account
-      const resolvedEmail =
-        defaultEmail ||
-        (registeredTransporter ? registeredTransporter.email : 'safaria347@gmail.com');
+    try {
+      // 1. Panggil Google Sign-In resmi (memunculkan popup dengan daftar seluruh akun Google di perangkat)
+      const authResult = await googleSignIn();
 
-      setConnectedEmail(resolvedEmail);
+      if (!authResult || !authResult.user || !authResult.user.email) {
+        // Pengguna membatalkan atau menutup popup
+        setIsConnectingGoogle(false);
+        return;
+      }
+
+      const email = authResult.user.email.trim().toLowerCase();
+      setConnectedEmail(email);
+      setGoogleUser(authResult.user);
+
+      // 2. Periksa apakah akun Google ini sudah pernah terikat di Cloud Firestore
+      const existingBinding = await getTransporterBinding(email);
+
+      if (existingBinding) {
+        // Akun sudah pernah terikat ke Transporter & Depo tertentu -> TOLAK PENDAFTARAN BARU
+        const existingTransName = existingBinding.namaTransporter || existingBinding.kodeTransporter;
+        const existingDepo = existingBinding.depo;
+
+        setRejectionModal({
+          isOpen: true,
+          email,
+          existingTransporter: existingTransName,
+          existingDepo,
+          existingRecord: existingBinding,
+          message: `Akun Google ${email} sudah terdaftar dan terkunci untuk ${existingTransName} (Depo ${existingDepo}). Anda tidak diizinkan mendaftarkan atau menggunakan akun ini untuk Transporter atau Depo lain.`,
+        });
+        setIsConnectingGoogle(false);
+        return;
+      }
+
+      // 3. Jika belum terikat (akun baru), lanjut ke Langkah 2 (pilih Transporter & Depo)
       setIsConnectingGoogle(false);
       setRegStep(2);
-    }, 600);
+    } catch (err: any) {
+      console.error('Error menghubungkan Google:', err);
+      setIsConnectingGoogle(false);
+      setRegError(err.message || 'Gagal menghubungkan akun Google. Silakan coba lagi.');
+    }
   };
 
-  // Complete Transporter Registration
-  const handleCompleteRegistration = (e: React.FormEvent) => {
+  // Complete Transporter Registration with Strict Firestore Binding
+  const handleCompleteRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!connectedEmail) return;
 
+    setRegError('');
+    setIsConnectingGoogle(true);
+
+    const email = connectedEmail.trim().toLowerCase();
+    const vendorCode = selectedVendor;
+    const vendorName = TRANSPORTER_NAMES[vendorCode] || 'PT. Tunas Muda';
+    const depoName = selectedDepo;
+
+    // 1. Cek validasi penolakan ke server & Cloud Firestore
+    const checkRes = await checkTransporterBinding(email, vendorCode, depoName);
+    if (!checkRes.allowed && checkRes.existingBinding) {
+      setIsConnectingGoogle(false);
+      setRejectionModal({
+        isOpen: true,
+        email,
+        existingTransporter: checkRes.existingBinding.namaTransporter || checkRes.existingBinding.kodeTransporter,
+        existingDepo: checkRes.existingBinding.depo,
+        existingRecord: checkRes.existingBinding,
+        message: checkRes.message,
+      });
+      return;
+    }
+
+    // 2. Simpan pengikatan permanen di Cloud Firestore
+    const saveRes = await saveTransporterBinding({
+      email,
+      googleUid: googleUser?.uid || '',
+      displayName: googleUser?.displayName || '',
+      kodeTransporter: vendorCode,
+      namaTransporter: vendorName,
+      depo: depoName,
+    });
+
+    if (saveRes.rejected && saveRes.existingBinding) {
+      setIsConnectingGoogle(false);
+      setRejectionModal({
+        isOpen: true,
+        email,
+        existingTransporter: saveRes.existingBinding.namaTransporter || saveRes.existingBinding.kodeTransporter,
+        existingDepo: saveRes.existingBinding.depo,
+        existingRecord: saveRes.existingBinding,
+        message: saveRes.message,
+      });
+      return;
+    }
+
+    if (!saveRes.success) {
+      setIsConnectingGoogle(false);
+      setRegError(saveRes.message || 'Gagal menyimpan pendaftaran akun.');
+      return;
+    }
+
+    // 3. Berhasil: Simpan ke state lokal & login
     const newTransporter: UserRecord = {
-      email: connectedEmail.trim().toLowerCase(),
-      namaTransporter: TRANSPORTER_NAMES[selectedVendor] || 'PT. Tunas Muda',
-      kodeTransporter: selectedVendor,
-      depo: selectedDepo,
+      email,
+      namaTransporter: vendorName,
+      kodeTransporter: vendorCode,
+      depo: depoName,
       role: 'transporter',
     };
 
     try {
-      // Save strictly to transporter-isolated storage
       localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(newTransporter));
-      
-      // Update registered list
       const stored = localStorage.getItem(STORAGE_REGISTERED_USERS);
       const list: UserRecord[] = stored ? JSON.parse(stored) : [];
       const filtered = list.filter((u) => u.email !== newTransporter.email);
       filtered.unshift(newTransporter);
       localStorage.setItem(STORAGE_REGISTERED_USERS, JSON.stringify(filtered));
-
       setRegisteredTransporter(newTransporter);
     } catch (err) {
       console.warn('Failed to save transporter account in localStorage', err);
     }
 
+    setIsConnectingGoogle(false);
     onLogin(newTransporter);
   };
 
@@ -271,19 +379,73 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   // Trigger Login Button: Check strictly for REGISTERED TRANSPORTER (NOT ADMIN)
-  const handlePressLoginButton = () => {
+  const handlePressLoginButton = async () => {
     setIsVerifyingGoogle(true);
     setShowGoogleStatusModal(true);
 
-    setTimeout(() => {
-      setIsVerifyingGoogle(false);
-      // Auto-redirect directly to main page IF strictly a registered transporter exists
+    try {
+      // 1. Jika ada akun tersimpan di perangkat, verifikasi keselarasan dengan Cloud Firestore
       if (registeredTransporter && registeredTransporter.role === 'transporter') {
-        setTimeout(() => {
-          onLogin(registeredTransporter);
-        }, 1200);
+        const binding = await getTransporterBinding(registeredTransporter.email);
+        setIsVerifyingGoogle(false);
+        if (binding) {
+          const updated: UserRecord = {
+            ...registeredTransporter,
+            kodeTransporter: binding.kodeTransporter,
+            namaTransporter: binding.namaTransporter,
+            depo: binding.depo,
+          };
+          setTimeout(() => {
+            onLogin(updated);
+          }, 1000);
+        } else {
+          setTimeout(() => {
+            onLogin(registeredTransporter);
+          }, 1000);
+        }
+        return;
       }
-    }, 600);
+
+      // 2. Jika belum ada akun tersimpan di localStorage, buka pemilihan akun Google resmi di HP
+      setIsVerifyingGoogle(false);
+      setShowGoogleStatusModal(false);
+
+      const authResult = await googleSignIn();
+      if (!authResult || !authResult.user?.email) {
+        return;
+      }
+
+      const email = authResult.user.email.trim().toLowerCase();
+      setIsVerifyingGoogle(true);
+      setShowGoogleStatusModal(true);
+
+      const binding = await getTransporterBinding(email);
+      setIsVerifyingGoogle(false);
+
+      if (binding) {
+        const userObj: UserRecord = {
+          email,
+          namaTransporter: binding.namaTransporter,
+          kodeTransporter: binding.kodeTransporter,
+          depo: binding.depo,
+          role: 'transporter',
+        };
+        localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userObj));
+        setRegisteredTransporter(userObj);
+
+        setTimeout(() => {
+          onLogin(userObj);
+        }, 1200);
+      } else {
+        // Belum terdaftar di Firestore, arahkan untuk melengkapi pendaftaran
+        setConnectedEmail(email);
+        setGoogleUser(authResult.user);
+        setRegisteredTransporter(null);
+      }
+    } catch (err) {
+      console.error('Error verifikasi login:', err);
+      setIsVerifyingGoogle(false);
+    }
   };
 
   // Admin Login Submission
@@ -474,7 +636,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                         Daftar / Sign Up
                       </div>
                       <div className="text-[11px] text-slate-500 font-normal mt-0.5">
-                        Hubungkan akun Google HP
+                        Hubungkan akun Google
                       </div>
                     </div>
                   </div>
@@ -642,74 +804,72 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           )}
 
           {/* ----------------------------------------------------------------- */}
-          {/* 3. ALUR TRANSPORTER: AUTENTIKASI GOOGLE RESMI DI HP                */}
+          {/* ----------------------------------------------------------------- */}
+          {/* 3. ALUR TRANSPORTER: DAFTAR / SIGN UP RINGKAS & CLEAN             */}
           {/* ----------------------------------------------------------------- */}
           {authMode === 'register' && (
             <div className="animate-in fade-in duration-150 text-left bg-white rounded-2xl shadow-lg border border-slate-200/90 p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                 <div>
-                  <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">
                     Daftar Transporter
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
                     Langkah {regStep} dari 2
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('welcome')}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer py-1 px-2 rounded-lg hover:bg-slate-100"
-                >
-                  ← Menu
-                </button>
+                <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200/60">
+                  Step {regStep} / 2
+                </span>
               </div>
 
               {regStep === 1 ? (
-                /* STEP 1: AUTENTIKASI AKUN GOOGLE RESMI DI HP */
-                <div className="space-y-3.5 pt-1">
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 text-center space-y-2">
-                    <div className="w-12 h-12 rounded-full bg-white shadow-2xs border border-slate-200 mx-auto flex items-center justify-center">
-                      <GoogleOfficialLogo className="w-6 h-6" />
+                /* STEP 1: HANYA TOMBOL HUBUNGKAN GOOGLE, STEP, & KEMBALI KE LOGIN */
+                <div className="space-y-4 pt-1">
+                  {/* Banner Pesan Error Bila Ada */}
+                  {regError && (
+                    <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-left flex items-start gap-2 animate-in fade-in duration-150">
+                      <div className="w-4 h-4 rounded-full bg-[#E50914] text-white flex items-center justify-center shrink-0 text-[10px] font-bold mt-0.5">!</div>
+                      <div className="text-xs text-red-800 leading-relaxed font-medium">
+                        {regError}
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900">
-                        Otentikasi Akun Google HP
-                      </h4>
-                      <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                        Gunakan akun Google resmi yang aktif di HP Anda secara otomatis tanpa perlu mengetik email manual.
-                      </p>
-                    </div>
-                  </div>
+                  )}
 
-                  {/* TOMBOL OTENTIKASI RESMI GOOGLE */}
+                  {/* TOMBOL HUBUNGKAN GOOGLE */}
                   <button
                     type="button"
                     disabled={isConnectingGoogle}
                     onClick={handleOfficialGoogleAuth}
-                    className="w-full h-11 sm:h-12 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 font-semibold text-xs sm:text-sm tracking-wide shadow-2xs flex items-center justify-center gap-3 transition cursor-pointer"
+                    className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 font-semibold text-xs sm:text-sm tracking-wide shadow-2xs flex items-center justify-center gap-3 transition cursor-pointer"
                   >
                     {isConnectingGoogle ? (
                       <>
                         <div className="w-4 h-4 border-2 border-[#E50914] border-t-transparent rounded-full animate-spin" />
-                        <span>Menghubungkan Akun Google di HP...</span>
+                        <span>Menghubungkan Google...</span>
                       </>
                     ) : (
                       <>
                         <GoogleOfficialLogo className="w-5 h-5 shrink-0" />
-                        <span>Lanjutkan dengan Akun Google HP</span>
+                        <span>Hubungkan Google</span>
                       </>
                     )}
                   </button>
 
-                  <div className="text-center pt-0.5">
-                    <span className="text-[11px] text-slate-400">
-                      Sistem akan mendeteksi akun Google resmi perangkat secara aman
-                    </span>
+                  {/* TULISAN KEMBALI KE HALAMAN LOGIN DIBAWAH TOMBOL HUBUNGKAN GOOGLE */}
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('welcome')}
+                      className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-slate-900 transition cursor-pointer py-1.5 px-3 rounded-lg hover:bg-slate-100"
+                    >
+                      ← Kembali ke Halaman Login
+                    </button>
                   </div>
                 </div>
               ) : (
-                /* STEP 2: PILIH PERUSAHAAN & DEPO */
-                <form onSubmit={handleCompleteRegistration} className="space-y-3.5">
+                /* STEP 2: PILIH PERUSAHAAN & DEPO OPERASIONAL */
+                <form onSubmit={handleCompleteRegistration} className="space-y-3.5 pt-1">
                   
                   {/* Banner Akun Google Terverifikasi */}
                   <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2.5">
@@ -772,6 +932,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       className="flex-1 h-11 rounded-xl bg-[#E50914] hover:bg-red-700 active:bg-red-800 text-white font-semibold text-xs shadow-sm cursor-pointer transition flex items-center justify-center gap-1.5"
                     >
                       Selesaikan Pendaftaran →
+                    </button>
+                  </div>
+
+                  <div className="text-center pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('welcome')}
+                      className="inline-flex items-center text-xs font-medium text-slate-500 hover:text-slate-800 transition cursor-pointer py-1"
+                    >
+                      ← Kembali ke Halaman Login
                     </button>
                   </div>
                 </form>
@@ -943,6 +1113,131 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 </div>
               </div>
             )}
+
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL PENOLAKAN KETAT: AKUN SUDAH TERIKAT TRANSPORTER/DEPO LAIN     */}
+      {/* =================================================================== */}
+      {rejectionModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl sm:rounded-3xl shadow-[0_25px_60px_-15px_rgba(229,9,20,0.35)] border border-red-200 w-full max-w-sm sm:max-w-md p-5 sm:p-6 text-center transform animate-in zoom-in-95 duration-200 text-slate-900">
+            
+            {/* Header Icon Shield Red */}
+            <div className="w-14 h-14 rounded-2xl bg-red-50 text-[#E50914] mx-auto flex items-center justify-center border border-red-200 shadow-inner mb-3">
+              <svg className="w-7 h-7 stroke-current fill-none" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase bg-red-100 text-red-800 tracking-wider mb-1.5">
+              <span>Akses Ditolak</span>
+              <span>•</span>
+              <span>Akun Terkunci</span>
+            </div>
+
+            <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+              Akun Google Sudah Terdaftar
+            </h3>
+
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+              Akun Google ini telah terikat secara permanen di database Cloud Firestore untuk satu vendor armada dan depo resmi.
+            </p>
+
+            {/* Info Box Detail Pengikatan */}
+            <div className="mt-4 p-3.5 bg-red-50/70 rounded-xl border border-red-200 text-left text-xs space-y-2">
+              <div>
+                <div className="text-[10px] font-bold text-red-700 uppercase tracking-wider">
+                  Alamat Email Google
+                </div>
+                <div className="font-mono font-bold text-slate-900 text-xs truncate">
+                  {rejectionModal.email}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-red-200/80 grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-[10px] font-bold text-red-700 uppercase tracking-wider">
+                    Terkunci Pada
+                  </div>
+                  <div className="font-bold text-slate-900 text-xs truncate">
+                    {rejectionModal.existingTransporter}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] font-bold text-red-700 uppercase tracking-wider">
+                    Depo Operasional
+                  </div>
+                  <div className="font-bold text-slate-900 text-xs truncate">
+                    Depo {rejectionModal.existingDepo}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2.5 text-[11px] text-slate-500 text-left leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+              ⚠️ Penggunaan satu akun Google untuk transporter atau depo lain ditolak otomatis demi menjaga kerahasiaan dan kepatuhan data logistik.
+            </div>
+
+            {/* Aksi Tindakan Pengguna */}
+            <div className="mt-4 space-y-2">
+              {/* Jika data binding tersedia, berikan opsi masuk ke transporter miliknya */}
+              {rejectionModal.existingRecord && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const record = rejectionModal.existingRecord!;
+                    const userObj: UserRecord = {
+                      email: record.email,
+                      namaTransporter: record.namaTransporter,
+                      kodeTransporter: record.kodeTransporter,
+                      depo: record.depo,
+                      role: 'transporter',
+                    };
+                    localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userObj));
+                    setRegisteredTransporter(userObj);
+                    setRejectionModal({ isOpen: false, email: '', existingTransporter: '', existingDepo: '' });
+                    setAuthMode('welcome');
+                    onLogin(userObj);
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs tracking-wide shadow-sm transition cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Masuk Sebagai {rejectionModal.existingTransporter} ({rejectionModal.existingDepo})</span>
+                  <span>→</span>
+                </button>
+              )}
+
+              {/* Tombol Pilih Akun Google Lain (Membuka popup Google) */}
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectionModal({ isOpen: false, email: '', existingTransporter: '', existingDepo: '' });
+                  setConnectedEmail('');
+                  setRegStep(1);
+                  handleOfficialGoogleAuth();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#E50914] hover:bg-red-700 active:bg-red-800 text-white font-bold text-xs tracking-wide shadow-sm transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                <GoogleOfficialLogo className="w-4 h-4 shrink-0" />
+                <span>Gunakan Akun Google Lain</span>
+              </button>
+
+              {/* Tombol Kembali ke Halaman Login */}
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectionModal({ isOpen: false, email: '', existingTransporter: '', existingDepo: '' });
+                  setConnectedEmail('');
+                  setRegStep(1);
+                  setAuthMode('welcome');
+                }}
+                className="w-full py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition cursor-pointer"
+              >
+                Kembali ke Halaman Login
+              </button>
+            </div>
 
           </div>
         </div>

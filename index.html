@@ -24,6 +24,17 @@
   </head>
   <body class="bg-slate-50 text-slate-900 font-['Inter',Roboto,-apple-system,BlinkMacSystemFont,sans-serif] antialiased min-h-screen">
     <div id="root"></div>
+    <script>
+      // Filter out benign Vite HMR WebSocket connection noise in container preview environment
+      window.addEventListener('unhandledrejection', function(event) {
+        if (event.reason && (
+          String(event.reason.message || event.reason).includes('WebSocket closed without opened') ||
+          String(event.reason.message || event.reason).includes('failed to connect to websocket')
+        )) {
+          event.preventDefault();
+        }
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
