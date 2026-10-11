@@ -1,33 +1,43 @@
-# Integrasi Pemilihan Akun Google Resmi & Penguncian Transporter-Depo di Cloud Firestore
+# Rencana Perbaikan Error 403 Google Verification & Akses Akun Bebas Blokir
 
-Rencana perbaikan autentikasi Google untuk menampilkan daftar seluruh akun Google di HP/perangkat pengguna via Google Account Picker resmi, serta pengikatan (*locking*) akun ke satu Transporter & Depo secara terpusat di Cloud Firestore dengan penolakan ketat (*strict rejection*) jika digunakan untuk transporter atau depo lain.
+Rencana teknis untuk mengatasi kendala `Error 403: access_denied` (*Access blocked: gen-lang-client-0286495500.firebaseapp.com has not completed the Google verification process*) pada saat menekan tombol Hubungkan Google, serta penyediaan opsi cadangan darurat (*fallback*) jika popup Google di perangkat tertentu mengalami kendala.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Keputusan arsitektur dan alur berikut telah dikonfirmasi melalui klarifikasi kebutuhan pengguna:
+> Keputusan perbaikan berikut telah dikonfirmasi melalui klarifikasi kebutuhan pengguna:
 
-- **Pemilihan Akun Google**: Menampilkan popup resmi Google OAuth dengan parameter `prompt: 'select_account'` sehingga pengguna di HP/browser langsung melihat daftar seluruh akun Google yang tersimpan di perangkatnya untuk dipilih.
-- **Penyimpanan Terpusat**: Data pengikatan (*binding*) akun Google ke Transporter dan Depo disimpan secara permanen di database Cloud Firestore (`transporter_bindings`) agar aturan penguncian berlaku lintas perangkat, lintas browser, dan tidak dapat dimanipulasi melalui local storage.
-- **Aturan Penolakan Ketat (*Strict Rejection*)**: Jika sebuah akun Google telah terdaftar dan terikat pada salah satu kombinasi Transporter dan Depo (misal: *PT. Tunas Muda - Karawang*), maka ketika akun tersebut dicoba digunakan untuk mendaftar atau mengakses Transporter lain (misal: *RJTM / WSS / SBR*) atau Depo lain (misal: *Baros / Cirebon*), sistem akan **langsung menolak proses pendaftaran/akses** dengan notifikasi peringatan yang jelas dan membatalkan proses.
+- **Pembersihan Izin Sensitif (OAuth Scopes)**: Menghapus izin sensitif `spreadsheets` dan `drive.file` dari `GoogleAuthProvider` untuk alur autentikasi transporter. Autentikasi Google hanya akan meminta identitas dasar (`email`, `profile`, `openid`). Hal ini membuat Google Sign-In **100% bebas dari kewajiban verifikasi Google Trust & Safety**, sehingga dapat digunakan langsung oleh **seluruh akun Google di perangkat mana pun tanpa diblokir Error 403**.
+- **Opsi Darurat Input Email Manual**: Menyediakan tombol alternatif jika popup Google diblokir oleh browser bawaan HP (*in-app browser* WhatsApp/Telegram) atau terkendala jaringan, di mana pengguna dapat memasukkan email Google mereka secara langsung dan tetap divalidasi dengan aturan penguncian Cloud Firestore.
+- **Konsistensi Penguncian Transporter & Depo**: Aturan penguncian terpusat di Cloud Firestore (`transporter_bindings`) tetap berjalan ketat; satu akun Google hanya berlaku untuk satu Transporter dan satu Depo resmi.
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Overview & Root Cause Analysis
 
-### Masalah Saat Ini
-1. Tombol "Hubungkan Google" pada alur pendaftaran transporter sebelumnya menggunakan simulasi *timeout* dengan fallback email statis (`safaria347@gmail.com`), bukan membuka dialog pemilihan akun resmi Google.
-2. Pengikatan akun transporter hanya disimpan di `localStorage` perangkat browser klien, sehingga belum ada validasi lintas perangkat dan belum ada aturan validasi yang menolak jika akun Google yang sama dipakai mendaftar di transporter/depo lain.
+### Akar Masalah (Root Cause)
+Pesan error:
+```
+Access blocked: gen-lang-client-0286495500.firebaseapp.com has not completed the Google verification process.
+The app is currently being tested, and can only be accessed by developer-approved testers.
+Error 403: access_denied
+```
+terjadi karena di file `src/services/googleAuth.ts` terdapat konfigurasi izin:
+```typescript
+export const SCOPES = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive.file',
+];
+SCOPES.forEach((scope) => provider.addScope(scope));
+```
+Google mengklasifikasikan `spreadsheets` dan `drive.file` sebagai **Sensitive/Restricted Scopes**. Setiap aplikasi web yang meminta izin ini wajib melalui proses verifikasi resmi Google atau dibatasi hanya untuk akun yang terdaftar manual di *Google Cloud Console Test Users*.
 
-### Solusi yang Direncanakan
-1. **Google Account Picker Resmi**: Mengaktifkan `signInWithPopup` Firebase Auth dengan `GoogleAuthProvider` dan `prompt: 'select_account'` untuk menampilkan popup pemilih akun resmi Google di HP/laptop pengguna.
-2. **Cloud Firestore Schema (`transporter_bindings`)**: Membuat koleksi data terpusat di Firestore dengan ID dokumen berupa alamat email pengguna (`email.toLowerCase()`).
-3. **Mekanisme Validasi & Penolakan (*Strict Locking Guard*)**:
-   - Saat akun Google dipilih, sistem memeriksa status di Firestore:
-     - **Jika Belum Terdaftar**: Pengguna melanjutkan ke Langkah 2 untuk memilih Transporter dan Depo resmi. Setelah selesai, akun langsung dikunci di Firestore.
-     - **Jika Sudah Terdaftar**:
-       - Jika Transporter & Depo yang dipilih cocok: Pengguna langsung diarahkan login.
-       - Jika Transporter atau Depo berbeda: Sistem **menolak akses**, menampilkan dialog/banner penolakan merah yang menyatakan akun sudah terkunci untuk transporter & depo aslinya, serta mereset proses pendaftaran.
+Padahal, untuk alur pendaftaran dan login Transporter di SIAPIN, aplikasi hanya membutuhkan verifikasi identitas email Google (`email` & `profile`). Sinkronisasi spreadsheet utama aplikasi SIAPIN dikelola melalui AppSheet REST API di sisi server yang tidak memerlukan token akses OAuth dari browser klien.
+
+### Solusi
+1. Pisahkan provider login umum dari provider spreadsheet sensitif. Provider login utama hanya meminta scope standar: `email`, `profile`, `openid`.
+2. Hapus `provider.addScope` untuk scope drive/sheets pada alur Sign-In Transporter.
+3. Tambahkan penanganan error khusus: jika browser memblokir popup (`auth/popup-blocked`), berikan opsi alternatif input email secara bersih.
 
 ---
 
@@ -36,58 +46,40 @@ Rencana perbaikan autentikasi Google untuk menampilkan daftar seluruh akun Googl
 ### Alur Antarmuka Pengguna (User Flow)
 
 ```
-[Layar Login Transporter]
-         │
-         ▼ Klik "Daftar Akun Baru"
-[Langkah 1: Konsep Ringkas & Clean]
+[Layar Sign Up Transporter: Step 1]
 ┌──────────────────────────────────────────────┐
 │  • Indikator Step (1 dari 2)                 │
 │  • [ G  Hubungkan Google ]                   │
-│  • "Kembali ke Halaman Login"                │
+│    (Meminta izin Profil & Email Dasar Saja)  │
+│                                              │
+│  • "Kendala popup? Masukkan email manual"    │
+│  • "← Kembali ke Halaman Login"              │
 └──────────────────────┬───────────────────────┘
                        │
-                       ▼ Klik "Hubungkan Google"
-┌──────────────────────────────────────────────┐
-│ Popup Resmi Google Account Picker            │
-│ "Pilih akun untuk melanjutkan ke SIAPIN"     │
-│ [ Akun 1: user1@gmail.com ]                  │
-│ [ Akun 2: user2@gmail.com ]                  │
-│ [ Tambahkan akun lain...  ]                  │
-└──────────────────────┬───────────────────────┘
-                       │ Akun Google terpilih
+       ┌───────────────┴───────────────┐
+       ▼                               ▼
+[Popup Google Resmi]            [Input Email Manual (Fallback)]
+• Langsung Terbuka              • Tampil kolom input email
+• Tanpa Layar Error 403         • Klik "Lanjutkan"
+• Pilih Akun di HP              • Verifikasi ke Firestore
+       │                               │
+       └───────────────┬───────────────┘
                        ▼
 ┌──────────────────────────────────────────────┐
-│ Cek Status Pengikatan di Cloud Firestore    │
-└──────────────┬───────────────────────────────┘
-               │
-      ┌────────┴───────────────────────────────┐
-      │                                        │
-      ▼ (Belum Terdaftar)                      ▼ (Sudah Terdaftar di Firestore)
-[Langkah 2: Pilih Transporter & Depo]          │
-┌──────────────────────────────────────┐       ├─► Jika Transporter & Depo SAMA:
-│ Email: [ akun@gmail.com (Terkunci) ] │       │   Langsung login ke Dashboard
-│ Pilih Transporter: [ TM / RJTM / ..] │       │
-│ Pilih Depo: [ Karawang / Baros / ..] │       └─► Jika Transporter ATAU Depo BEDA:
-│ [ Simpan & Kunci Akun ]              │           ▼
-└──────────────────┬───────────────────┘       ┌─────────────────────────────────────┐
-                   │                           │ 🚫 PENOLAKAN KETAT (MODAL/ALERT)    │
-                   ▼                           │ "Akun Google akun@gmail.com sudah   │
-    Simpan & Kunci ke Firestore                │ terdaftar untuk PT. Tunas Muda -    │
-    `transporter_bindings/{email}`             │ Karawang. Dilarang memakai akun ini │
-                   │                           │ untuk Transporter atau Depo lain!"  │
-                   ▼                           └─────────────────────────────────────┘
-         Masuk ke Dashboard
+│ Validasi Pengikatan di Cloud Firestore       │
+│ • Jika Terdaftar di Vendor Lain: TOLAK       │
+│ • Jika Akun Baru: Lanjut ke Step 2 (Pilih)   │
+└──────────────────────────────────────────────┘
 ```
 
-### Desain Visual & Komponen UI
-1. **Modal / Banner Penolakan (*Access Denied Alert*)**:
-   - Warna: Latar belakang lembut dengan aksen *Crimson Red* (`border-red-200 bg-red-50 text-red-900`).
-   - Ikon: `ShieldAlert` atau `AlertTriangle` berukuran jelas.
-   - Isi Pesan: Memperlihatkan secara transparan email Google yang digunakan, nama transporter yang saat ini terikat, dan depo yang terikat, disertai tombol "Kembali / Ganti Akun Google".
-2. **Step 1 Layar Pendaftaran**:
-   - Mempertahankan konsep *ultra-clean* yang sudah diminta: Hanya tombol resmi Google "Hubungkan Google", indikator step ringkas, dan tautan teks "Kembali ke Halaman Login".
-3. **Loading State yang Responsif**:
-   - Saat popup Google sedang aktif atau sedang memverifikasi ke Firestore, tombol menampilkan spinner halus tanpa glitch.
+### Penyesuaian Komponen UI
+1. **Tombol "Hubungkan Google"**:
+   - Menghubungkan akun secara instan tanpa layar peringatan "App not verified".
+2. **Tautan Opsi Darurat (Emergency Fallback)**:
+   - Terletak rapi di bawah tombol Google: teks kecil bersih `Kendala popup? Masukkan email manual`.
+   - Mengubah tampilan menjadi form input email sederhana tanpa merusak estetika clean yang diinginkan pengguna.
+3. **Pesan Penolakan Bersih**:
+   - Jika email yang dimasukkan (baik via Google popup maupun manual) sudah terikat pada Transporter atau Depo lain, modal penolakan merah tetap memblokir proses secara ketat.
 
 ---
 
@@ -95,78 +87,47 @@ Rencana perbaikan autentikasi Google untuk menampilkan daftar seluruh akun Googl
 
 | Skenario | Keputusan Sistem | Alasan & Manfaat |
 | :--- | :--- | :--- |
-| **Pemilihan Akun di HP** | Memanggil `signInWithPopup` dengan `prompt: 'select_account'` | Memungkinkan pengguna yang memiliki lebih dari satu akun Google di HP memilih akun spesifik untuk operasional |
-| **Perangkat Mobile / PWA** | Fallback ramah popup & penanganan pembatalan (*popup closed by user*) | Mencegah aplikasi macet jika pengguna menutup jendela popup Google |
-| **Penolakan Akun Ganda** | Penolakan langsung (*hard-block*) saat mencoba mendaftarkan transporter/depo lain | Menjaga integritas data logistik armada agar tidak ada benturan hak akses antar transporter |
-| **Penyimpanan Firestore** | Dokumen per email di koleksi `transporter_bindings` | Memberikan query instan berkecepatan tinggi O(1) via `getDoc(doc(db, 'transporter_bindings', email))` |
-| **Sinkronisasi Cache Lokal** | Cache lokal tetap diupdate setelah verifikasi Firestore sukses | Memastikan jika jaringan sementara offline, aplikasi tetap mengingat sesi login terakhir yang sah |
+| **Izin OAuth** | Hanya minta scope standar (`email`, `profile`) | Membebaskan aplikasi dari Error 403 Google Verification selamanya |
+| **Penyimpanan Database** | Tetap menggunakan Cloud Firestore `transporter_bindings` | Keamanan dan validasi penguncian akun tetap 100% terpusat dan andal |
+| **Fallback Manual** | Disediakan jika popup diblokir oleh browser HP | Menghindari kegagalan registrasi pada peramban mobile (seperti in-app browser) |
+| **Google Sheets Service** | Scope sheets dipisahkan ke fungsi khusus admin | Tidak membebani pengguna transporter lapangan dengan izin berbahaya |
 
 ---
 
-## 4. Technical Architecture & System Design
+## 4. Technical Architecture & Implementation Steps
 
-### A. Struktur Data Cloud Firestore
+### Step 1: Modifikasi `src/services/googleAuth.ts`
+- Hapus penambahan scope `https://www.googleapis.com/auth/spreadsheets` dan `https://www.googleapis.com/auth/drive.file` pada provider utama.
+- Konfigurasikan `GoogleAuthProvider` murni dengan parameter `prompt: 'select_account'` untuk menampilkan seluruh akun di HP tanpa trigger verifikasi privasi Google.
+- Sediakan provider terpisah jika fitur ekspor admin Google Sheets spesifik membutuhkan izin tambahan di kemudian hari.
 
-Koleksi: `transporter_bindings`
-Dokumen ID: `email.toLowerCase()` (contoh: `safaria347@gmail.com`)
+### Step 2: Pembaruan `src/components/LoginScreen.tsx`
+- Tambahkan penanganan kondisi error `auth/popup-blocked` atau `auth/cancelled-popup-request`.
+- Sediakan toggle opsi darurat: `showManualEmailInput` jika pengguna mengalami kendala teknis pada browser HP.
+- Pastikan email manual yang dimasukkan tetap melalui validasi Firestore yang sama persis (`checkTransporterBinding` dan `getTransporterBinding`).
 
-```typescript
-interface TransporterBindingRecord {
-  email: string;              // Primary Key (email Google hasil OAuth)
-  googleUid: string;          // UID autentikasi Firebase
-  displayName?: string;       // Nama dari profil Google
-  kodeTransporter: 'TM' | 'RJTM' | 'WSS' | 'SBR';
-  namaTransporter: string;    // Contoh: "PT. Tunas Muda"
-  depo: 'Karawang' | 'Baros' | 'Cirebon';
-  createdAt: string;          // ISO Date string
-  updatedAt: string;          // ISO Date string
-  deviceInfo?: string;        // Ringkasan user agent browser
-}
-```
-
-### B. Service Firestore & Autentikasi
-1. **`src/services/transporterAuthService.ts`**:
-   - `checkGoogleBinding(email: string): Promise<TransporterBindingRecord | null>`
-     - Membaca dokumen dari Firestore `transporter_bindings/{email}`.
-   - `bindGoogleTransporterAccount(binding: TransporterBindingRecord): Promise<{ success: boolean; message?: string }>`
-     - Melakukan pengecekan ganda: jika sudah ada dan berbeda transporter/depo, lempar error penolakan.
-     - Jika belum ada, simpan data dokumen pengikatan ke Firestore.
-   - `verifyTransporterAccess(email: string, targetTransporter: string, targetDepo: string): Promise<{ allowed: boolean; existingBinding?: TransporterBindingRecord; message?: string }>`
-     - Memvalidasi kecocokan transporter dan depo.
-2. **`src/services/googleAuth.ts`**:
-   - Memastikan `googleSignIn()` menggunakan `prompt: 'select_account'`.
-   - Mengembalikan data pengguna terautentikasi (`user.email`, `user.displayName`, `user.uid`).
-3. **`src/components/LoginScreen.tsx`**:
-   - Memodifikasi `handleOfficialGoogleAuth` untuk memanggil `googleSignIn()` secara nyata.
-   - Mengintegrasikan pengecekan Firestore sebelum beralih ke Step 2.
-   - Menyediakan tampilan modal penolakan jika akun terbukti sudah terikat pada transporter atau depo lain.
-4. **Backend API Proxy (Opsional / Pelengkap)**:
-   - Endpoint `/api/auth/transporter-binding` pada `server.ts` untuk melayani pembacaan dan penyimpanan binding melalui Firebase Admin/Client jika diperlukan atau secara langsung via Firebase Web SDK di frontend.
+### Step 3: Verifikasi Kompilasi & Pengujian
+- Jalankan `npm run lint` dan `npm run build` untuk memastikan tidak ada kesalahan tipe.
+- Uji alur klik "Hubungkan Google": pastikan popup langsung menampilkan daftar akun tanpa pesan "Access blocked: gen-lang-client...".
 
 ---
 
 ## 5. Security & Boundary Hardening
 
-1. **Email Normalization**: Alamat email wajib selalu di-trim dan diubah ke huruf kecil (`toLowerCase()`) untuk mencegah perbedaan case-sensitive.
-2. **Strict Immutable Binding**: Sekali akun terikat ke Transporter dan Depo, pengikatan tersebut tidak dapat diubah oleh pengguna umum di klien. Hanya admin yang memiliki otorisasi untuk mereset binding bila terjadi mutasi supir/transporter.
-3. **Handling Popup Blockers**: Menangani exception `auth/popup-closed-by-user` dan `auth/cancelled-popup-request` dengan anggun tanpa menampilkan crash pada antarmuka pengguna.
-4. **Offline Resilience**: Jika koneksi internet bermasalah saat mengecek Firestore, aplikasi menampilkan pesan ramah dan meminta mencoba kembali alih-alih meloloskan pendaftaran secara tidak sah.
+1. **Email Format Validation**: Sanitasi ketat untuk email yang diinput manual (wajib format email valid dan diubah ke huruf kecil).
+2. **Firestore Locking Persistence**: Email manual tidak dapat melewati penguncian Firestore; jika sudah terikat ke transporter/depo lain, sistem tetap melempar penolakan 403.
+3. **No Sensitive Tokens in LocalStorage**: Hanya data identitas profil yang disimpan secara lokal.
 
 ---
 
 ## 6. Acceptance Criteria & Test Plan
 
-1. **Pengujian Popup Akun Google**:
-   - Klik "Daftar Akun Baru" &rarr; Klik "Hubungkan Google".
-   - Popup Google resmi terbuka dan menampilkan seluruh akun Google yang aktif di HP/browser.
-   - Pemilihan salah satu akun berhasil mengekstrak email akun tersebut ke aplikasi.
-2. **Pengujian Pendaftaran Pertama Kali**:
-   - Akun Google baru memilih Transporter `PT. Tunas Muda` dan Depo `Karawang`.
-   - Klik Simpan Pendaftaran &rarr; Data tersimpan di Cloud Firestore `transporter_bindings`.
-   - Pengguna berhasil masuk ke dashboard Transporter.
-3. **Pengujian Penolakan Transporter Berbeda**:
-   - Klik "Daftar Akun Baru" menggunakan akun Google yang sama.
-   - Coba pilih Transporter `PT. Roda Jagat Tunas Mas` (RJTM) atau Depo `Baros`.
-   - Sistem **MENOLAK** dengan pesan peringatan: *"Akun Google ini telah terdaftar untuk PT. Tunas Muda (Karawang) dan ditolak untuk transporter atau depo lain."*
-4. **Pengujian Login Akun yang Sah**:
-   - Pengguna dengan akun Google yang sudah terikat dapat langsung login tanpa diminta mendaftar ulang bila memilih transporter dan depo yang sesuai.
+1. **Uji Bebas Error 403**:
+   - Klik "Hubungkan Google" di perangkat HP maupun browser desktop.
+   - Popup Google terbuka langsung dengan daftar akun Google tanpa menampilkan pesan "Access blocked / Error 403: access_denied".
+2. **Uji Pemilihan Akun**:
+   - Memilih salah satu akun Google berhasil mengekstrak email dan mengarahkan ke Step 2 (Pilih Transporter & Depo).
+3. **Uji Penguncian Akun**:
+   - Akun yang sudah didaftarkan pada satu Transporter & Depo tetap ditolak jika dicoba didaftarkan kembali ke vendor/depo lain.
+4. **Uji Opsi Darurat Manual**:
+   - Jika toggle manual email dipilih, pengguna dapat menginput email dan melanjutkan proses registrasi dengan validasi Firestore yang sama.

@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana komprehensif integrasi Google Account Picker resmi (menampilkan daftar akun di HP/browser), pengikatan permanen akun Google ke Transporter & Depo pada Cloud Firestore, serta mekanisme penolakan ketat jika akun digunakan untuk transporter atau depo yang berbeda.",
-  "updatedAt":  "2026-10-11T11:17:20.006276994Z",
+  "summary":  "Rencana penyelesaian Error 403 (access_denied) Google Verification dengan menghapus izin sensitif Google Sheets/Drive pada GoogleAuthProvider sehingga bebas verifikasi untuk seluruh akun Google, serta penambahan opsi darurat input email manual jika popup Google di perangkat mengalami kendala.",
+  "updatedAt":  "2026-10-11T11:40:06.179395504Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

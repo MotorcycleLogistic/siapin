@@ -149,6 +149,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [selectedDepo, setSelectedDepo] = useState<string>('Karawang');
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [regError, setRegError] = useState<string>('');
+  const [showManualInput, setShowManualInput] = useState<boolean>(false);
+  const [manualEmail, setManualEmail] = useState<string>('');
 
   // Strict Rejection Modal State
   const [rejectionModal, setRejectionModal] = useState<{
@@ -273,7 +275,50 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     } catch (err: any) {
       console.error('Error menghubungkan Google:', err);
       setIsConnectingGoogle(false);
-      setRegError(err.message || 'Gagal menghubungkan akun Google. Silakan coba lagi.');
+      if (err.code === 'auth/popup-blocked') {
+        setRegError('Popup Google diblokir oleh peramban HP Anda. Silakan izinkan popup atau gunakan opsi input email manual di bawah.');
+        setShowManualInput(true);
+      } else {
+        setRegError(err.message || 'Gagal menghubungkan akun Google. Anda dapat menggunakan opsi input email manual di bawah.');
+      }
+    }
+  };
+
+  // Emergency Fallback: Input Manual Email Transporter
+  const handleManualEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegError('');
+    const email = manualEmail.trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      setRegError('Mohon masukkan alamat email yang valid.');
+      return;
+    }
+
+    setIsConnectingGoogle(true);
+    try {
+      const existingBinding = await getTransporterBinding(email);
+      if (existingBinding) {
+        const existingTransName = existingBinding.namaTransporter || existingBinding.kodeTransporter;
+        const existingDepo = existingBinding.depo;
+
+        setRejectionModal({
+          isOpen: true,
+          email,
+          existingTransporter: existingTransName,
+          existingDepo,
+          existingRecord: existingBinding,
+          message: `Akun Google ${email} sudah terdaftar dan terkunci untuk ${existingTransName} (Depo ${existingDepo}). Anda tidak diizinkan mendaftarkan atau menggunakan akun ini untuk Transporter atau Depo lain.`,
+        });
+        setIsConnectingGoogle(false);
+        return;
+      }
+
+      setConnectedEmail(email);
+      setIsConnectingGoogle(false);
+      setRegStep(2);
+    } catch (err: any) {
+      setIsConnectingGoogle(false);
+      setRegError(err.message || 'Gagal memvalidasi email.');
     }
   };
 
@@ -836,36 +881,111 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     </div>
                   )}
 
-                  {/* TOMBOL HUBUNGKAN GOOGLE */}
-                  <button
-                    type="button"
-                    disabled={isConnectingGoogle}
-                    onClick={handleOfficialGoogleAuth}
-                    className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 font-semibold text-xs sm:text-sm tracking-wide shadow-2xs flex items-center justify-center gap-3 transition cursor-pointer"
-                  >
-                    {isConnectingGoogle ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-[#E50914] border-t-transparent rounded-full animate-spin" />
-                        <span>Menghubungkan Google...</span>
-                      </>
-                    ) : (
-                      <>
-                        <GoogleOfficialLogo className="w-5 h-5 shrink-0" />
-                        <span>Hubungkan Google</span>
-                      </>
-                    )}
-                  </button>
+                  {!showManualInput ? (
+                    <>
+                      {/* TOMBOL HUBUNGKAN GOOGLE */}
+                      <button
+                        type="button"
+                        disabled={isConnectingGoogle}
+                        onClick={handleOfficialGoogleAuth}
+                        className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 font-semibold text-xs sm:text-sm tracking-wide shadow-2xs flex items-center justify-center gap-3 transition cursor-pointer"
+                      >
+                        {isConnectingGoogle ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-[#E50914] border-t-transparent rounded-full animate-spin" />
+                            <span>Menghubungkan Google...</span>
+                          </>
+                        ) : (
+                          <>
+                            <GoogleOfficialLogo className="w-5 h-5 shrink-0" />
+                            <span>Hubungkan Google</span>
+                          </>
+                        )}
+                      </button>
 
-                  {/* TULISAN KEMBALI KE HALAMAN LOGIN DIBAWAH TOMBOL HUBUNGKAN GOOGLE */}
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setAuthMode('welcome')}
-                      className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-slate-900 transition cursor-pointer py-1.5 px-3 rounded-lg hover:bg-slate-100"
-                    >
-                      ← Kembali ke Halaman Login
-                    </button>
-                  </div>
+                      {/* Tautan Opsi Darurat: Input Email Manual */}
+                      <div className="text-center pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowManualInput(true);
+                            setRegError('');
+                          }}
+                          className="text-[11px] font-medium text-slate-400 hover:text-slate-600 transition cursor-pointer underline underline-offset-2"
+                        >
+                          Kendala popup? Masukkan email manual
+                        </button>
+                      </div>
+
+                      {/* TULISAN KEMBALI KE HALAMAN LOGIN DIBAWAH TOMBOL HUBUNGKAN GOOGLE */}
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setAuthMode('welcome')}
+                          className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-slate-900 transition cursor-pointer py-1.5 px-3 rounded-lg hover:bg-slate-100"
+                        >
+                          ← Kembali ke Halaman Login
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    /* FORM INPUT EMAIL MANUAL (CADANGAN DARURAT) */
+                    <form onSubmit={handleManualEmailSubmit} className="space-y-3 pt-0.5 animate-in fade-in duration-150">
+                      <div className="text-left">
+                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                          Alamat Email Google
+                        </label>
+                        <input
+                          type="email"
+                          required
+                          value={manualEmail}
+                          onChange={(e) => setManualEmail(e.target.value)}
+                          placeholder="contoh: akun.driver@gmail.com"
+                          className="w-full h-11 px-3.5 rounded-xl border border-slate-300 text-xs font-medium text-slate-900 focus:border-[#E50914] focus:outline-hidden bg-white"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                          Email akan diverifikasi dan dikunci pada Cloud Firestore.
+                        </p>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isConnectingGoogle}
+                        className="w-full h-11 px-4 rounded-xl bg-[#E50914] hover:bg-red-700 active:bg-red-800 text-white font-semibold text-xs shadow-sm transition cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        {isConnectingGoogle ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            <span>Memeriksa Email...</span>
+                          </>
+                        ) : (
+                          <span>Lanjutkan ke Langkah 2 →</span>
+                        )}
+                      </button>
+
+                      <div className="text-center pt-1 flex flex-col gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowManualInput(false);
+                            setRegError('');
+                          }}
+                          className="text-[11px] font-medium text-slate-500 hover:text-slate-800 transition cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <GoogleOfficialLogo className="w-3.5 h-3.5" />
+                          <span>Gunakan Pemilihan Akun Otomatis</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setAuthMode('welcome')}
+                          className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition cursor-pointer py-1"
+                        >
+                          ← Kembali ke Halaman Login
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               ) : (
                 /* STEP 2: PILIH PERUSAHAAN & DEPO OPERASIONAL */
