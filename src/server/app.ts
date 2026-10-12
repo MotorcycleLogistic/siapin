@@ -466,11 +466,11 @@ export async function getBindingFromStorage(cleanEmail: string) {
       const { doc, getDoc } = await import('firebase/firestore');
       const ref = doc(firestoreDb, 'transporter_bindings', cleanEmail);
       const snap = await getDoc(ref);
-      if (snap.exists()) {
+      if (snap && snap.exists()) {
         return snap.data();
       }
     } catch (e: any) {
-      console.warn('Firestore get binding error:', e.message);
+      console.warn('Firestore get binding error:', e?.message || e);
     }
   }
 
@@ -485,6 +485,7 @@ export async function getBindingFromStorage(cleanEmail: string) {
 }
 
 export async function saveBindingToStorage(binding: any) {
+  if (!binding || typeof binding !== 'object') return;
   const cleanEmail = String(binding.email || '').trim().toLowerCase();
   if (!cleanEmail) return;
 
@@ -505,7 +506,7 @@ export async function saveBindingToStorage(binding: any) {
       const ref = doc(firestoreDb, 'transporter_bindings', cleanEmail);
       await setDoc(ref, binding, { merge: true });
     } catch (e: any) {
-      console.warn('Firestore save binding error:', e.message);
+      console.warn('Firestore save binding error:', e?.message || e);
     }
   }
 }
@@ -513,7 +514,7 @@ export async function saveBindingToStorage(binding: any) {
 // Check transporter binding endpoint
 app.get('/api/transporter-binding/:email', async (req: Request, res: Response) => {
   try {
-    const email = String(req.params.email || '').trim().toLowerCase();
+    const email = String(req.params?.email || '').trim().toLowerCase();
     if (!email) {
       return res.status(400).json({ success: false, message: 'Email tidak valid' });
     }
@@ -531,7 +532,8 @@ app.get('/api/transporter-binding/:email', async (req: Request, res: Response) =
 // Save or validate transporter binding endpoint
 app.post('/api/transporter-binding', async (req: Request, res: Response) => {
   try {
-    const { email, googleUid, displayName, kodeTransporter, namaTransporter, depo } = req.body;
+    const body = req.body || {};
+    const { email, googleUid, displayName, kodeTransporter, namaTransporter, depo } = body;
     const cleanEmail = String(email || '').trim().toLowerCase();
 
     if (!cleanEmail || !kodeTransporter || !depo) {
@@ -545,12 +547,12 @@ app.post('/api/transporter-binding', async (req: Request, res: Response) => {
 
     // STRICT REJECTION: Jika akun sudah pernah terdaftar untuk transporter atau depo lain
     if (existing) {
-      const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
-      const existingDepo = String(existing.depo || '').trim().toLowerCase();
+      const existingTrans = String(existing?.kodeTransporter || '').trim().toUpperCase();
+      const existingDepo = String(existing?.depo || '').trim().toLowerCase();
       const targetTrans = String(kodeTransporter).trim().toUpperCase();
       const targetDepo = String(depo).trim().toLowerCase();
 
-      if (existingTrans !== targetTrans || existingDepo !== targetDepo) {
+      if (existingTrans && (existingTrans !== targetTrans || existingDepo !== targetDepo)) {
         return res.status(403).json({
           success: false,
           rejected: true,
@@ -591,7 +593,8 @@ app.post('/api/transporter-binding', async (req: Request, res: Response) => {
 // Check access permission without modifying
 app.post('/api/transporter-binding/check', async (req: Request, res: Response) => {
   try {
-    const { email, kodeTransporter, depo } = req.body;
+    const body = req.body || {};
+    const { email, kodeTransporter, depo } = body;
     const cleanEmail = String(email || '').trim().toLowerCase();
     if (!cleanEmail) {
       return res.status(400).json({ success: false, message: 'Email tidak valid' });
@@ -606,8 +609,8 @@ app.post('/api/transporter-binding/check', async (req: Request, res: Response) =
       });
     }
 
-    const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
-    const existingDepo = String(existing.depo || '').trim().toLowerCase();
+    const existingTrans = String(existing?.kodeTransporter || '').trim().toUpperCase();
+    const existingDepo = String(existing?.depo || '').trim().toLowerCase();
     const targetTrans = String(kodeTransporter || '').trim().toUpperCase();
     const targetDepo = String(depo || '').trim().toLowerCase();
 
@@ -1156,7 +1159,7 @@ app.post('/api/admin/reset-readiness-clean', async (_req: Request, res: Response
         const ref = doc(firestoreDb, 'daily_snapshots', todayStr);
         await setDoc(ref, snapshotData);
       } catch (fErr: any) {
-        console.warn('Firestore reset sync note:', fErr.message);
+        console.warn('Firestore reset sync note:', fErr?.message || fErr);
       }
     }
 
@@ -1167,7 +1170,7 @@ app.post('/api/admin/reset-readiness-clean', async (_req: Request, res: Response
       total: cleanTrucks.length,
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1193,7 +1196,7 @@ app.post('/api/admin/wipe-all-snapshots', async (_req: Request, res: Response) =
           await deleteDoc(doc(firestoreDb, 'daily_snapshots', d.id));
         }
       } catch (fErr: any) {
-        console.warn('Firestore wipe note:', fErr.message);
+        console.warn('Firestore wipe note:', fErr?.message || fErr);
       }
     }
 
@@ -1202,7 +1205,7 @@ app.post('/api/admin/wipe-all-snapshots', async (_req: Request, res: Response) =
       message: 'Seluruh arsip database tanggal-tanggal sebelumnya telah berhasil dihapus total dari database server dan Cloud Firestore.',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1216,7 +1219,7 @@ app.post('/api/snapshots', async (req: Request, res: Response) => {
     await saveDailySnapshotInternal(date, trucks);
     res.json({ success: true, message: `Snapshot ${date} berhasil disimpan di database`, date });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1270,7 +1273,7 @@ app.get('/api/snapshots', async (_req: Request, res: Response) => {
       .reverse();
     res.json({ success: true, dates, snapshots });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1311,14 +1314,14 @@ app.get('/api/snapshots/range', async (req: Request, res: Response) => {
           }
         });
       } catch (fErr: any) {
-        console.warn('Firestore range query notice:', fErr.message);
+        console.warn('Firestore range query notice:', fErr?.message || fErr);
       }
     }
 
     const dates = Array.from(datesSet).sort();
     res.json({ success: true, dates, snapshots });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1348,7 +1351,7 @@ app.get('/api/snapshots/:date', async (req: Request, res: Response) => {
 
     res.json({ success: false, message: `Snapshot untuk tanggal ${date} belum tersedia di database` });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 
@@ -1414,7 +1417,7 @@ app.get('/api/snapshots/download/:date', async (req: Request, res: Response) => 
     res.setHeader('Content-Disposition', `attachment; filename="Rekap_Armada_SIAPIN_${date}.csv"`);
     res.send(csvContent);
   } catch (err: any) {
-    res.status(500).send(err.message);
+    res.status(500).send(err?.message || 'Server error');
   }
 });
 

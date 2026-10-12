@@ -275,11 +275,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     } catch (err: any) {
       console.error('Error menghubungkan Google:', err);
       setIsConnectingGoogle(false);
-      if (err.code === 'auth/popup-blocked') {
+      if (err?.code === 'auth/popup-blocked') {
         setRegError('Popup Google diblokir oleh peramban HP Anda. Silakan izinkan popup atau gunakan opsi input email manual di bawah.');
         setShowManualInput(true);
       } else {
-        setRegError(err.message || 'Gagal menghubungkan akun Google. Anda dapat menggunakan opsi input email manual di bawah.');
+        setRegError(err?.message || 'Gagal menghubungkan akun Google. Anda dapat menggunakan opsi input email manual di bawah.');
       }
     }
   };
@@ -298,8 +298,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     try {
       const existingBinding = await getTransporterBinding(email);
       if (existingBinding) {
-        const existingTransName = existingBinding.namaTransporter || existingBinding.kodeTransporter;
-        const existingDepo = existingBinding.depo;
+        const existingTransName = existingBinding.namaTransporter || existingBinding.kodeTransporter || 'Transporter';
+        const existingDepo = existingBinding.depo || 'Karawang';
 
         setRejectionModal({
           isOpen: true,
@@ -318,7 +318,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setRegStep(2);
     } catch (err: any) {
       setIsConnectingGoogle(false);
-      setRegError(err.message || 'Gagal memvalidasi email.');
+      setRegError(err?.message || 'Gagal memvalidasi email.');
     }
   };
 
@@ -341,15 +341,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       // 1. Cek validasi penolakan ke server & Cloud Firestore
       const checkRes = await checkTransporterBinding(email, vendorCode, depoName);
-      if (!checkRes.allowed && checkRes.existingBinding) {
+      if (checkRes && !checkRes.allowed && checkRes.existingBinding) {
         setIsConnectingGoogle(false);
+        const transName = checkRes.existingBinding?.namaTransporter || checkRes.existingBinding?.kodeTransporter || 'Transporter Lain';
+        const transDepo = checkRes.existingBinding?.depo || 'Karawang';
         setRejectionModal({
           isOpen: true,
           email,
-          existingTransporter: checkRes.existingBinding.namaTransporter || checkRes.existingBinding.kodeTransporter,
-          existingDepo: checkRes.existingBinding.depo,
+          existingTransporter: transName,
+          existingDepo: transDepo,
           existingRecord: checkRes.existingBinding,
-          message: checkRes.message,
+          message: checkRes?.message || `Akun Google ${email} telah terdaftar untuk ${transName} (Depo ${transDepo}).`,
         });
         return;
       }
@@ -364,22 +366,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         depo: depoName,
       });
 
-      if (saveRes.rejected && saveRes.existingBinding) {
+      if (saveRes?.rejected && saveRes?.existingBinding) {
         setIsConnectingGoogle(false);
+        const transName = saveRes.existingBinding?.namaTransporter || saveRes.existingBinding?.kodeTransporter || 'Transporter Lain';
+        const transDepo = saveRes.existingBinding?.depo || 'Karawang';
         setRejectionModal({
           isOpen: true,
           email,
-          existingTransporter: saveRes.existingBinding.namaTransporter || saveRes.existingBinding.kodeTransporter,
-          existingDepo: saveRes.existingBinding.depo,
+          existingTransporter: transName,
+          existingDepo: transDepo,
           existingRecord: saveRes.existingBinding,
-          message: saveRes.message,
+          message: saveRes?.message || `Akun Google ${email} telah terdaftar untuk ${transName} (Depo ${transDepo}).`,
         });
         return;
       }
 
-      if (!saveRes.success) {
+      if (saveRes && !saveRes.success) {
         setIsConnectingGoogle(false);
-        setRegError(saveRes.message || 'Gagal menyimpan pendaftaran akun.');
+        setRegError(saveRes?.message || 'Gagal menyimpan pendaftaran akun.');
         return;
       }
 
@@ -394,9 +398,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       try {
         localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(newTransporter));
+        localStorage.setItem('siapin_transporter_account', JSON.stringify(newTransporter));
         const stored = localStorage.getItem(STORAGE_REGISTERED_USERS);
         const list: UserRecord[] = stored ? JSON.parse(stored) : [];
-        const filtered = list.filter((u) => u.email !== newTransporter.email);
+        const filtered = list.filter((u) => u?.email !== newTransporter.email);
         filtered.unshift(newTransporter);
         localStorage.setItem(STORAGE_REGISTERED_USERS, JSON.stringify(filtered));
         setRegisteredTransporter(newTransporter);
@@ -405,7 +410,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       }
 
       setIsConnectingGoogle(false);
-      onLogin(newTransporter);
+      if (typeof onLogin === 'function') {
+        onLogin(newTransporter);
+      }
     } catch (unexpectedError: any) {
       console.error('Pendaftaran gagal tidak terduga:', unexpectedError);
       setIsConnectingGoogle(false);

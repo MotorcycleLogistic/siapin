@@ -33,28 +33,31 @@ export async function getTransporterBinding(email: string): Promise<TransporterB
       const text = await res.text();
       try {
         const data = JSON.parse(text);
-        if (data.success && data.binding) {
+        if (data && typeof data === 'object' && data.success && data.binding) {
           return data.binding as TransporterBindingRecord;
         }
       } catch {}
     }
-  } catch (err) {
-    console.warn('Gagal memuat binding dari server, cek local fallback:', err);
+  } catch (err: any) {
+    console.warn('Gagal memuat binding dari server, cek local fallback:', err?.message || err);
   }
 
   // Fallback ke localStorage jika koneksi server sedang terkendala
   try {
-    const local = localStorage.getItem(STORAGE_TRANSPORTER_ACCOUNT);
-    if (local) {
-      const parsed = JSON.parse(local);
-      if (parsed.email && parsed.email.toLowerCase() === cleanEmail) {
-        return {
-          email: parsed.email.toLowerCase(),
-          kodeTransporter: parsed.kodeTransporter,
-          namaTransporter: parsed.namaTransporter,
-          depo: parsed.depo,
-          createdAt: parsed.createdAt,
-        };
+    const localKeys = [STORAGE_TRANSPORTER_ACCOUNT, 'SIAPIN_TRANSPORTER_REGISTERED_ACCOUNT'];
+    for (const key of localKeys) {
+      const local = localStorage.getItem(key);
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (parsed && parsed.email && parsed.email.toLowerCase() === cleanEmail) {
+          return {
+            email: parsed.email.toLowerCase(),
+            kodeTransporter: parsed.kodeTransporter,
+            namaTransporter: parsed.namaTransporter,
+            depo: parsed.depo,
+            createdAt: parsed.createdAt,
+          };
+        }
       }
     }
   } catch {}
@@ -90,38 +93,44 @@ export async function checkTransporterBinding(
       const text = await res.text();
       try {
         const data = JSON.parse(text);
-        return {
-          allowed: Boolean(data.allowed),
-          isNew: Boolean(data.isNew),
-          existingBinding: data.existingBinding || null,
-          message: data.message,
-        };
+        if (data && typeof data === 'object') {
+          return {
+            allowed: Boolean(data.allowed),
+            isNew: Boolean(data.isNew),
+            existingBinding: data.existingBinding || null,
+            message: data.message || '',
+          };
+        }
       } catch {}
     }
-  } catch (err) {
-    console.warn('Pengecekan binding ke server gagal:', err);
+  } catch (err: any) {
+    console.warn('Pengecekan binding ke server gagal:', err?.message || err);
   }
 
   // Fallback offline check
-  const localBinding = await getTransporterBinding(cleanEmail);
-  if (!localBinding) {
-    return { allowed: true, isNew: true };
-  }
-
-  if (targetTransporter && targetDepo) {
-    const matchTrans = localBinding.kodeTransporter.toUpperCase() === targetTransporter.toUpperCase();
-    const matchDepo = localBinding.depo.toLowerCase() === targetDepo.toLowerCase();
-    if (!matchTrans || !matchDepo) {
-      return {
-        allowed: false,
-        isNew: false,
-        existingBinding: localBinding,
-        message: `Akun Google ${cleanEmail} telah terdaftar untuk ${localBinding.namaTransporter} (${localBinding.depo}). Anda tidak diizinkan menggunakan akun ini untuk Transporter atau Depo lain.`,
-      };
+  try {
+    const localBinding = await getTransporterBinding(cleanEmail);
+    if (!localBinding) {
+      return { allowed: true, isNew: true, message: '' };
     }
-  }
 
-  return { allowed: true, isNew: false, existingBinding: localBinding };
+    if (targetTransporter && targetDepo) {
+      const matchTrans = (localBinding.kodeTransporter || '').toUpperCase() === targetTransporter.toUpperCase();
+      const matchDepo = (localBinding.depo || '').toLowerCase() === targetDepo.toLowerCase();
+      if (!matchTrans || !matchDepo) {
+        return {
+          allowed: false,
+          isNew: false,
+          existingBinding: localBinding,
+          message: `Akun Google ${cleanEmail} telah terdaftar untuk ${localBinding.namaTransporter || localBinding.kodeTransporter} (${localBinding.depo}). Anda tidak diizinkan menggunakan akun ini untuk Transporter atau Depo lain.`,
+        };
+      }
+    }
+
+    return { allowed: true, isNew: false, existingBinding: localBinding, message: '' };
+  } catch {
+    return { allowed: true, isNew: true, message: '' };
+  }
 }
 
 /**
@@ -129,8 +138,16 @@ export async function checkTransporterBinding(
  */
 export async function saveTransporterBinding(
   binding: TransporterBindingRecord
-): Promise<{ success: boolean; rejected?: boolean; existingBinding?: TransporterBindingRecord; message?: string }> {
-  const cleanEmail = binding.email.trim().toLowerCase();
+): Promise<{ success: boolean; rejected?: boolean; existingBinding?: TransporterBindingRecord | null; message?: string }> {
+  const cleanEmail = (binding?.email || '').trim().toLowerCase();
+
+  const userRecord = {
+    email: cleanEmail,
+    namaTransporter: binding?.namaTransporter || '',
+    kodeTransporter: binding?.kodeTransporter || 'TM',
+    depo: binding?.depo || 'Karawang',
+    role: 'transporter',
+  };
 
   try {
     const res = await fetch('/api/transporter-binding', {
@@ -155,7 +172,7 @@ export async function saveTransporterBinding(
       return {
         success: false,
         rejected: true,
-        existingBinding: data?.existingBinding,
+        existingBinding: data?.existingBinding || null,
         message: data?.message || `Akun Google ini telah terdaftar untuk ${data?.existingBinding?.namaTransporter || 'transporter lain'} dan ditolak untuk transporter lain.`,
       };
     }
@@ -164,31 +181,23 @@ export async function saveTransporterBinding(
       console.warn('Server storage warning, saved locally:', data?.message || textRes);
     }
 
-    // Perbarui cache localStorage setelah sukses tersimpan
-    const userRecord = {
-      email: cleanEmail,
-      namaTransporter: binding.namaTransporter,
-      kodeTransporter: binding.kodeTransporter,
-      depo: binding.depo,
-      role: 'transporter',
-    };
-    localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userRecord));
+    // Perbarui cache localStorage setelah sukses tersimpan (simpan di kedua nama kunci)
+    try {
+      localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userRecord));
+      localStorage.setItem('SIAPIN_TRANSPORTER_REGISTERED_ACCOUNT', JSON.stringify(userRecord));
+    } catch {}
 
     return {
       success: true,
       message: data?.message || 'Pendaftaran transporter berhasil disimpan.',
     };
   } catch (err: any) {
-    console.warn('Network issue during saveTransporterBinding, continuing with local storage:', err);
+    console.warn('Network issue during saveTransporterBinding, continuing with local storage:', err?.message || err);
     // Graceful offline fallback: allow user to finish registration smoothly
-    const userRecord = {
-      email: cleanEmail,
-      namaTransporter: binding.namaTransporter,
-      kodeTransporter: binding.kodeTransporter,
-      depo: binding.depo,
-      role: 'transporter',
-    };
-    localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userRecord));
+    try {
+      localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(userRecord));
+      localStorage.setItem('SIAPIN_TRANSPORTER_REGISTERED_ACCOUNT', JSON.stringify(userRecord));
+    } catch {}
     return {
       success: true,
       message: 'Pendaftaran tersimpan di sesi perangkat Anda.',

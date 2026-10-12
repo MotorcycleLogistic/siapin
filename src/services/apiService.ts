@@ -63,7 +63,7 @@ export async function syncWithAppSheet(customTableName?: string): Promise<{
     const res = await fetch(url);
     const data = await res.json();
 
-    if (res.ok && data.success && data.trucks) {
+    if (res.ok && data?.success && data?.trucks) {
       return {
         success: true,
         trucks: data.trucks,
@@ -74,14 +74,14 @@ export async function syncWithAppSheet(customTableName?: string): Promise<{
 
     return {
       success: false,
-      message: data.message || 'Gagal memuat data dari AppSheet',
-      isApiDisabled: Boolean(data.isApiDisabled),
-      isTableNotFound: Boolean(data.isTableNotFound),
+      message: data?.message || 'Gagal memuat data dari AppSheet',
+      isApiDisabled: Boolean(data?.isApiDisabled),
+      isTableNotFound: Boolean(data?.isTableNotFound),
     };
   } catch (err: any) {
     return {
       success: false,
-      message: err.message || 'Koneksi ke server proxy AppSheet gagal',
+      message: err?.message || 'Koneksi ke server proxy AppSheet gagal',
     };
   }
 }
@@ -111,18 +111,18 @@ export async function sendAppSheetAction(
     });
 
     const data = await res.json().catch(() => ({ success: true }));
-    if (res.ok && data.success) {
+    if (res.ok && data?.success) {
       return { success: true };
     }
 
     return {
       success: false,
-      message: data.message || 'Gagal memperbarui data di AppSheet',
-      isApiDisabled: Boolean(data.isApiDisabled),
+      message: data?.message || 'Gagal memperbarui data di AppSheet',
+      isApiDisabled: Boolean(data?.isApiDisabled),
     };
   } catch (err: any) {
-    console.warn('AppSheet background sync error:', err.message);
-    return { success: false, message: err.message };
+    console.warn('AppSheet background sync error:', err?.message || err);
+    return { success: false, message: err?.message || 'Gagal memperbarui armada' };
   }
 }
 
@@ -144,7 +144,7 @@ export async function syncMasterDriversToDataTruk2(): Promise<{
   } catch (err: any) {
     return {
       success: false,
-      message: err.message || 'Gagal menyinkronkan master sopir ke Data Truk 2',
+      message: err?.message || 'Gagal menyinkronkan master sopir ke Data Truk 2',
     };
   }
 }
@@ -465,12 +465,12 @@ export async function syncWithGoogleSheets(gasUrl: string): Promise<{
 
     return {
       success: false,
-      message: data.message || 'Format respon Google Apps Script tidak sesuai',
+      message: data?.message || 'Format respon Google Apps Script tidak sesuai',
     };
   } catch (err: any) {
     return {
       success: false,
-      message: err.message || 'Gagal menghubungi Google Apps Script Web App',
+      message: err?.message || 'Gagal menghubungi Google Apps Script Web App',
     };
   }
 }
@@ -492,11 +492,11 @@ export async function sendGasAction(
     });
 
     const data = await res.json().catch(() => ({ status: 'success' }));
-    return { success: true, message: data.message };
+    return { success: true, message: data?.message };
   } catch (err: any) {
-    console.warn('Google Sheets background sync notice:', err.message);
+    console.warn('Google Sheets background sync notice:', err?.message || err);
     // Don't block the UI if GAS is unresponsive, local state is already saved
-    return { success: false, message: err.message };
+    return { success: false, message: err?.message || 'Sinkronisasi Google Sheets terkendala' };
   }
 }
 
