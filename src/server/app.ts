@@ -1418,4 +1418,13 @@ app.get('/api/snapshots/download/:date', async (req: Request, res: Response) => 
   }
 });
 
+// Global fallback error handler to guarantee JSON response on serverless
+app.use((err: any, _req: Request, res: Response, _next: any) => {
+  console.error('Unhandled server error:', err);
+  res.status(500).json({
+    success: false,
+    message: err?.message || 'Terjadi kesalahan internal pada server.',
+  });
+});
+
 export default app;
