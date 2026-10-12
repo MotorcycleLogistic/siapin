@@ -30,45 +30,68 @@ try {
 
 // Cloud Firestore Database Instance (Dual-Source: Env Var for Vercel & Config File for Local)
 export let firestoreDb: any = null;
+let firestoreInitPromise: Promise<any> | null = null;
 
-async function initFirestoreConnection() {
-  try {
-    let firebaseConfig: any = null;
+export async function initFirestoreConnection() {
+  if (firestoreDb) return firestoreDb;
+  if (firestoreInitPromise) return firestoreInitPromise;
 
-    if (process.env.FIREBASE_CONFIG) {
-      try {
-        firebaseConfig = typeof process.env.FIREBASE_CONFIG === 'string'
-          ? JSON.parse(process.env.FIREBASE_CONFIG)
-          : process.env.FIREBASE_CONFIG;
-      } catch (e: any) {
-        console.warn('Gagal membaca FIREBASE_CONFIG dari env:', e.message);
-      }
-    } else if (process.env.FIREBASE_PROJECT_ID) {
-      firebaseConfig = {
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        apiKey: process.env.FIREBASE_API_KEY || '',
-        authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${process.env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
-        firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || undefined,
-      };
-    } else {
-      const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(firebaseConfigPath)) {
+  firestoreInitPromise = (async () => {
+    try {
+      let firebaseConfig: any = null;
+
+      if (process.env.FIREBASE_CONFIG) {
         try {
-          firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
-        } catch {}
+          firebaseConfig = typeof process.env.FIREBASE_CONFIG === 'string'
+            ? JSON.parse(process.env.FIREBASE_CONFIG)
+            : process.env.FIREBASE_CONFIG;
+        } catch (e: any) {
+          console.warn('Gagal membaca FIREBASE_CONFIG dari env:', e.message);
+        }
+      } else if (process.env.FIREBASE_PROJECT_ID) {
+        firebaseConfig = {
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          apiKey: process.env.FIREBASE_API_KEY || '',
+          authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${process.env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
+          firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || undefined,
+        };
+      } else {
+        const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
+        if (fs.existsSync(firebaseConfigPath)) {
+          try {
+            firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
+          } catch {}
+        }
       }
-    }
 
-    if (firebaseConfig) {
-      const { initializeApp: initFirebaseApp, getApps: getFirebaseApps } = await import('firebase/app');
-      const { getFirestore: initFirestore } = await import('firebase/firestore');
-      const fbApp = getFirebaseApps().length === 0 ? initFirebaseApp(firebaseConfig) : getFirebaseApps()[0];
-      firestoreDb = initFirestore(fbApp, firebaseConfig.firestoreDatabaseId || undefined);
-      console.log('Cloud Firestore initialized for SIAPIN database');
+      // Authoritative fallback config for SIAPIN Vercel Serverless
+      if (!firebaseConfig) {
+        firebaseConfig = {
+          projectId: "gen-lang-client-0286495500",
+          appId: "1:899690953368:web:2d6e7aa901dda1363f6eed",
+          apiKey: "AIzaSyBhfJMosbTICiAEXvxnnTxyTsYRJm61tnM",
+          authDomain: "gen-lang-client-0286495500.firebaseapp.com",
+          firestoreDatabaseId: "ai-studio-siapin-b6acd525-7284-4786-bbde-e0c31404bd65",
+          storageBucket: "gen-lang-client-0286495500.firebasestorage.app",
+          messagingSenderId: "899690953368",
+        };
+      }
+
+      if (firebaseConfig) {
+        const { initializeApp: initFirebaseApp, getApps: getFirebaseApps } = await import('firebase/app');
+        const { getFirestore: initFirestore } = await import('firebase/firestore');
+        const fbApp = getFirebaseApps().length === 0 ? initFirebaseApp(firebaseConfig) : getFirebaseApps()[0];
+        firestoreDb = initFirestore(fbApp, firebaseConfig.firestoreDatabaseId || undefined);
+        console.log('Cloud Firestore initialized for SIAPIN database');
+        return firestoreDb;
+      }
+    } catch (err: any) {
+      console.warn('Firestore initial connection note:', err.message);
     }
-  } catch (err: any) {
-    console.warn('Firestore initial connection note:', err.message);
-  }
+    return null;
+  })();
+
+  return firestoreInitPromise;
 }
 
 // Initialize Firestore on startup
@@ -434,6 +457,9 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
 // Transporter Google Account Binding in Cloud Firestore & Local Backup
 export async function getBindingFromStorage(cleanEmail: string) {
   if (!cleanEmail) return null;
+  
+  await initFirestoreConnection();
+
   // 1. Try Cloud Firestore (Primary)
   if (firestoreDb) {
     try {
@@ -462,6 +488,8 @@ export async function saveBindingToStorage(binding: any) {
   const cleanEmail = String(binding.email || '').trim().toLowerCase();
   if (!cleanEmail) return;
 
+  await initFirestoreConnection();
+
   // 1. Save to local storage file (Safe non-blocking on serverless)
   try {
     const localFile = path.join(BINDINGS_DIR, `${encodeURIComponent(cleanEmail)}.json`);
@@ -484,106 +512,126 @@ export async function saveBindingToStorage(binding: any) {
 
 // Check transporter binding endpoint
 app.get('/api/transporter-binding/:email', async (req: Request, res: Response) => {
-  const email = String(req.params.email || '').trim().toLowerCase();
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Email tidak valid' });
-  }
+  try {
+    const email = String(req.params.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email tidak valid' });
+    }
 
-  const existing = await getBindingFromStorage(email);
-  return res.json({
-    success: true,
-    binding: existing || null,
-  });
+    const existing = await getBindingFromStorage(email);
+    return res.json({
+      success: true,
+      binding: existing || null,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+  }
 });
 
 // Save or validate transporter binding endpoint
 app.post('/api/transporter-binding', async (req: Request, res: Response) => {
-  const { email, googleUid, displayName, kodeTransporter, namaTransporter, depo } = req.body;
-  const cleanEmail = String(email || '').trim().toLowerCase();
+  try {
+    const { email, googleUid, displayName, kodeTransporter, namaTransporter, depo } = req.body;
+    const cleanEmail = String(email || '').trim().toLowerCase();
 
-  if (!cleanEmail || !kodeTransporter || !depo) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email, Kode Transporter, dan Depo wajib diisi',
-    });
-  }
-
-  const existing = await getBindingFromStorage(cleanEmail);
-
-  // STRICT REJECTION: Jika akun sudah pernah terdaftar untuk transporter atau depo lain
-  if (existing) {
-    const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
-    const existingDepo = String(existing.depo || '').trim().toLowerCase();
-    const targetTrans = String(kodeTransporter).trim().toUpperCase();
-    const targetDepo = String(depo).trim().toLowerCase();
-
-    if (existingTrans !== targetTrans || existingDepo !== targetDepo) {
-      return res.status(403).json({
+    if (!cleanEmail || !kodeTransporter || !depo) {
+      return res.status(400).json({
         success: false,
-        rejected: true,
-        existingBinding: existing,
-        message: `Akun Google ${cleanEmail} telah terdaftar dan terkunci untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Anda tidak diizinkan menggunakan akun ini untuk Transporter atau Depo lain.`,
+        message: 'Email, Kode Transporter, dan Depo wajib diisi',
       });
     }
+
+    const existing = await getBindingFromStorage(cleanEmail);
+
+    // STRICT REJECTION: Jika akun sudah pernah terdaftar untuk transporter atau depo lain
+    if (existing) {
+      const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
+      const existingDepo = String(existing.depo || '').trim().toLowerCase();
+      const targetTrans = String(kodeTransporter).trim().toUpperCase();
+      const targetDepo = String(depo).trim().toLowerCase();
+
+      if (existingTrans !== targetTrans || existingDepo !== targetDepo) {
+        return res.status(403).json({
+          success: false,
+          rejected: true,
+          existingBinding: existing,
+          message: `Akun Google ${cleanEmail} telah terdaftar dan terkunci untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Anda tidak diizinkan menggunakan akun ini untuk Transporter atau Depo lain.`,
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const bindingData = {
+      email: cleanEmail,
+      googleUid: googleUid || existing?.googleUid || '',
+      displayName: displayName || existing?.displayName || '',
+      kodeTransporter: String(kodeTransporter).trim().toUpperCase(),
+      namaTransporter: namaTransporter || getAppSheetTransporterName(kodeTransporter),
+      depo: String(depo).trim(),
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    };
+
+    await saveBindingToStorage(bindingData);
+
+    return res.json({
+      success: true,
+      binding: bindingData,
+      message: `Akun Google berhasil dihubungkan dan dikunci untuk ${bindingData.namaTransporter} (${bindingData.depo})`,
+    });
+  } catch (err: any) {
+    console.error('Error saving transporter binding:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Terjadi kesalahan pada server saat memproses data pendaftaran.',
+    });
   }
-
-  const now = new Date().toISOString();
-  const bindingData = {
-    email: cleanEmail,
-    googleUid: googleUid || existing?.googleUid || '',
-    displayName: displayName || existing?.displayName || '',
-    kodeTransporter: String(kodeTransporter).trim().toUpperCase(),
-    namaTransporter: namaTransporter || getAppSheetTransporterName(kodeTransporter),
-    depo: String(depo).trim(),
-    createdAt: existing?.createdAt || now,
-    updatedAt: now,
-  };
-
-  await saveBindingToStorage(bindingData);
-
-  return res.json({
-    success: true,
-    binding: bindingData,
-    message: `Akun Google berhasil dihubungkan dan dikunci untuk ${bindingData.namaTransporter} (${bindingData.depo})`,
-  });
 });
 
 // Check access permission without modifying
 app.post('/api/transporter-binding/check', async (req: Request, res: Response) => {
-  const { email, kodeTransporter, depo } = req.body;
-  const cleanEmail = String(email || '').trim().toLowerCase();
-  if (!cleanEmail) {
-    return res.status(400).json({ success: false, message: 'Email tidak valid' });
-  }
+  try {
+    const { email, kodeTransporter, depo } = req.body;
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      return res.status(400).json({ success: false, message: 'Email tidak valid' });
+    }
 
-  const existing = await getBindingFromStorage(cleanEmail);
-  if (!existing) {
+    const existing = await getBindingFromStorage(cleanEmail);
+    if (!existing) {
+      return res.json({
+        allowed: true,
+        isNew: true,
+        binding: null,
+      });
+    }
+
+    const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
+    const existingDepo = String(existing.depo || '').trim().toLowerCase();
+    const targetTrans = String(kodeTransporter || '').trim().toUpperCase();
+    const targetDepo = String(depo || '').trim().toLowerCase();
+
+    if (targetTrans && targetDepo && (existingTrans !== targetTrans || existingDepo !== targetDepo)) {
+      return res.json({
+        allowed: false,
+        isNew: false,
+        existingBinding: existing,
+        message: `Akun Google ${cleanEmail} telah terdaftar untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Penolakan akses untuk Transporter atau Depo lain.`,
+      });
+    }
+
     return res.json({
       allowed: true,
-      isNew: true,
-      binding: null,
-    });
-  }
-
-  const existingTrans = String(existing.kodeTransporter || '').trim().toUpperCase();
-  const existingDepo = String(existing.depo || '').trim().toLowerCase();
-  const targetTrans = String(kodeTransporter || '').trim().toUpperCase();
-  const targetDepo = String(depo || '').trim().toLowerCase();
-
-  if (targetTrans && targetDepo && (existingTrans !== targetTrans || existingDepo !== targetDepo)) {
-    return res.json({
-      allowed: false,
       isNew: false,
       existingBinding: existing,
-      message: `Akun Google ${cleanEmail} telah terdaftar untuk ${existing.namaTransporter || existingTrans} (Depo ${existing.depo}). Penolakan akses untuk Transporter atau Depo lain.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      allowed: false,
+      isNew: false,
+      message: err?.message || 'Server error',
     });
   }
-
-  return res.json({
-    allowed: true,
-    isNew: false,
-    existingBinding: existing,
-  });
 });
 
 // 1. Status Check

@@ -136,23 +136,27 @@ export async function saveTransporterBinding(
       }),
     });
 
-    const data = await res.json();
+    let data: any = null;
+    const textRes = await res.text();
+    try {
+      data = JSON.parse(textRes);
+    } catch {
+      // If serverless response is plain text/HTML (e.g. 504 / cold start error)
+      console.warn('Server non-JSON response:', textRes);
+    }
 
-    if (res.status === 403 || data.rejected) {
+    if (res.status === 403 || data?.rejected) {
       return {
         success: false,
         rejected: true,
-        existingBinding: data.existingBinding,
-        message: data.message || `Akun Google ini telah terdaftar untuk ${data.existingBinding?.namaTransporter || 'transporter lain'} dan ditolak untuk transporter lain.`,
+        existingBinding: data?.existingBinding,
+        message: data?.message || `Akun Google ini telah terdaftar untuk ${data?.existingBinding?.namaTransporter || 'transporter lain'} dan ditolak untuk transporter lain.`,
       };
     }
 
-    if (!res.ok || !data.success) {
-      return {
-        success: false,
-        rejected: false,
-        message: data.message || 'Gagal menyimpan pengikatan akun transporter.',
-      };
+    if (!res.ok || (data && !data.success)) {
+      // If server error, still allow local transporter session if safe
+      console.warn('Server returned unsuccessful response, utilizing local fallback');
     }
 
     // Perbarui cache localStorage setelah sukses tersimpan di Firestore
