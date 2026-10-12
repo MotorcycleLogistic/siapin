@@ -1,133 +1,142 @@
-# Rencana Perbaikan Error 403 Google Verification & Akses Akun Bebas Blokir
+# Rencana Migrasi & Deployment Aplikasi SIAPIN ke Vercel
 
-Rencana teknis untuk mengatasi kendala `Error 403: access_denied` (*Access blocked: gen-lang-client-0286495500.firebaseapp.com has not completed the Google verification process*) pada saat menekan tombol Hubungkan Google, serta penyediaan opsi cadangan darurat (*fallback*) jika popup Google di perangkat tertentu mengalami kendala.
+Rencana perbaikan dan panduan arsitektur komprehensif untuk mendistribusikan aplikasi **SIAPIN (Sistem Kesiapan Transporter)** ke platform **Vercel** tanpa mengurangi maupun mengubah satupun fitur, fungsi, atau antarmuka yang ada saat ini.
 
-## User Review & Critical Decisions
+---
+
+## 1. Kesimpulan Kelayakan (Feasibility Verdict)
 
 > [!IMPORTANT]
-> Keputusan perbaikan berikut telah dikonfirmasi melalui klarifikasi kebutuhan pengguna:
-
-- **Pembersihan Izin Sensitif (OAuth Scopes)**: Menghapus izin sensitif `spreadsheets` dan `drive.file` dari `GoogleAuthProvider` untuk alur autentikasi transporter. Autentikasi Google hanya akan meminta identitas dasar (`email`, `profile`, `openid`). Hal ini membuat Google Sign-In **100% bebas dari kewajiban verifikasi Google Trust & Safety**, sehingga dapat digunakan langsung oleh **seluruh akun Google di perangkat mana pun tanpa diblokir Error 403**.
-- **Opsi Darurat Input Email Manual**: Menyediakan tombol alternatif jika popup Google diblokir oleh browser bawaan HP (*in-app browser* WhatsApp/Telegram) atau terkendala jaringan, di mana pengguna dapat memasukkan email Google mereka secara langsung dan tetap divalidasi dengan aturan penguncian Cloud Firestore.
-- **Konsistensi Penguncian Transporter & Depo**: Aturan penguncian terpusat di Cloud Firestore (`transporter_bindings`) tetap berjalan ketat; satu akun Google hanya berlaku untuk satu Transporter dan satu Depo resmi.
-
----
-
-## 1. Overview & Root Cause Analysis
-
-### Akar Masalah (Root Cause)
-Pesan error:
-```
-Access blocked: gen-lang-client-0286495500.firebaseapp.com has not completed the Google verification process.
-The app is currently being tested, and can only be accessed by developer-approved testers.
-Error 403: access_denied
-```
-terjadi karena di file `src/services/googleAuth.ts` terdapat konfigurasi izin:
-```typescript
-export const SCOPES = [
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.file',
-];
-SCOPES.forEach((scope) => provider.addScope(scope));
-```
-Google mengklasifikasikan `spreadsheets` dan `drive.file` sebagai **Sensitive/Restricted Scopes**. Setiap aplikasi web yang meminta izin ini wajib melalui proses verifikasi resmi Google atau dibatasi hanya untuk akun yang terdaftar manual di *Google Cloud Console Test Users*.
-
-Padahal, untuk alur pendaftaran dan login Transporter di SIAPIN, aplikasi hanya membutuhkan verifikasi identitas email Google (`email` & `profile`). Sinkronisasi spreadsheet utama aplikasi SIAPIN dikelola melalui AppSheet REST API di sisi server yang tidak memerlukan token akses OAuth dari browser klien.
-
-### Solusi
-1. Pisahkan provider login umum dari provider spreadsheet sensitif. Provider login utama hanya meminta scope standar: `email`, `profile`, `openid`.
-2. Hapus `provider.addScope` untuk scope drive/sheets pada alur Sign-In Transporter.
-3. Tambahkan penanganan error khusus: jika browser memblokir popup (`auth/popup-blocked`), berikan opsi alternatif input email secara bersih.
+> **APAKAH APLIKASI BISA DI-DEPLOY KE VERCEL TANPA MENGUBAH FITUR DAN FUNGSI?**
+> **JAWABAN: BISA 100%.**
+>
+> Seluruh fitur yang ada saat ini tetap berfungsi normal:
+> 1. ✅ **PWA (Progressive Web App)**: Installable di perangkat Android/iOS/Desktop dengan Service Worker & cache offline.
+> 2. ✅ **Autentikasi Akun Google Resmi**: Pemilihan akun Google dan penguncian 1 Akun ke 1 Transporter & 1 Depo.
+> 3. ✅ **Integrasi AppSheet MD to Dealer 2**: Sinkronisasi data armada, jadwal, dan status inspeksi via REST API.
+> 4. ✅ **Daily Snapshots & Laporan**: Arsip harian dan rekap kesiapan armada.
+> 5. ✅ **Admin Control Panel**: Manajemen transporter, pembatalan tautan akun, dan inspeksi lapangan.
 
 ---
 
-## 2. User Experience & Visual Design
+## 2. Perbedaan Lingkungan Runtime (Cloud Run vs Vercel Serverless)
 
-### Alur Antarmuka Pengguna (User Flow)
+Aplikasi saat ini berjalan di container Node.js stateful (port 3000). Saat dipindahkan ke Vercel, arsitektur berubah menjadi **Serverless & Static Edge**:
 
 ```
-[Layar Sign Up Transporter: Step 1]
-┌──────────────────────────────────────────────┐
-│  • Indikator Step (1 dari 2)                 │
-│  • [ G  Hubungkan Google ]                   │
-│    (Meminta izin Profil & Email Dasar Saja)  │
-│                                              │
-│  • "Kendala popup? Masukkan email manual"    │
-│  • "← Kembali ke Halaman Login"              │
-└──────────────────────┬───────────────────────┘
-                       │
-       ┌───────────────┴───────────────┐
-       ▼                               ▼
-[Popup Google Resmi]            [Input Email Manual (Fallback)]
-• Langsung Terbuka              • Tampil kolom input email
-• Tanpa Layar Error 403         • Klik "Lanjutkan"
-• Pilih Akun di HP              • Verifikasi ke Firestore
-       │                               │
-       └───────────────┬───────────────┘
-                       ▼
-┌──────────────────────────────────────────────┐
-│ Validasi Pengikatan di Cloud Firestore       │
-│ • Jika Terdaftar di Vendor Lain: TOLAK       │
-│ • Jika Akun Baru: Lanjut ke Step 2 (Pilih)   │
-└──────────────────────────────────────────────┘
+[Arsitektur Saat Ini - Stateful Node.js]
+Klien Browser ──► Express Server (server.ts) ──► File Lokal (data/snapshots/) + Firestore
+                                            ──► AppSheet API
+
+[Arsitektur Vercel - Serverless & Edge CDN]
+Klien Browser ──► Vercel Edge CDN (dist/ - Vite SPA & PWA)
+              ──► /api/* ──► Vercel Serverless Function (api/index.ts) ──► Cloud Firestore (Cloud)
+                                                                     ──► AppSheet API
 ```
 
-### Penyesuaian Komponen UI
-1. **Tombol "Hubungkan Google"**:
-   - Menghubungkan akun secara instan tanpa layar peringatan "App not verified".
-2. **Tautan Opsi Darurat (Emergency Fallback)**:
-   - Terletak rapi di bawah tombol Google: teks kecil bersih `Kendala popup? Masukkan email manual`.
-   - Mengubah tampilan menjadi form input email sederhana tanpa merusak estetika clean yang diinginkan pengguna.
-3. **Pesan Penolakan Bersih**:
-   - Jika email yang dimasukkan (baik via Google popup maupun manual) sudah terikat pada Transporter atau Depo lain, modal penolakan merah tetap memblokir proses secara ketat.
+| Aspek | Lingkungan Saat Ini | Lingkungan Vercel | Tindakan Penyesuaian |
+| :--- | :--- | :--- | :--- |
+| **Frontend** | Dilayani oleh Express `dist/` | Static Asset di Edge CDN Vercel | Konfigurasi rewrite SPA di `vercel.json` |
+| **Backend API** | Server Express terus aktif (`app.listen`) | Serverless Function (`api/index.ts`) | Pisahkan logika rute Express dari `app.listen` agar dapat diekspor ke Vercel |
+| **Penyimpanan Data** | File lokal `./data/` & Cloud Firestore | Read-only filesystem / Ephemeral | Alihkan 100% penyimpanan harian & binding ke Cloud Firestore |
+| **File Konfigurasi** | `firebase-applet-config.json` lokal | Environment Variables di Vercel Dashboard | Dukung pembacaan config dari `process.env.FIREBASE_CONFIG` |
+| **Google Auth Domain** | Domain AI Studio dev/pre | Domain Vercel (`*.vercel.app`) | Tambahkan domain Vercel ke Authorized Domains di Firebase |
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 3. Komponen yang Perlu Diperbaiki & Disesuaikan
 
-| Skenario | Keputusan Sistem | Alasan & Manfaat |
+### A. Modularisasi Express Server (`server.ts` & `api/index.ts`)
+* **Masalah**: `server.ts` saat ini memanggil `app.listen(PORT)` secara langsung. Di Vercel, fungsi backend dipanggil sebagai Serverless Handler tanpa `app.listen`.
+* **Solusi Perbaikan**:
+  1. Pisahkan deklarasi Express app, middleware, rute API, dan integrasi Firestore ke modul tersendiri (misal: `src/server/app.ts` atau fungsi `createServerApp()`).
+  2. File `server.ts` tetap dipertahankan untuk lingkungan pengembangan lokal dan AI Studio (`app.listen(3000)`).
+  3. Buat file `api/index.ts` yang mengimpor Express app tersebut dan mengekspornya sebagai default handler untuk Vercel:
+     ```typescript
+     import app from '../src/server/app';
+     export default app;
+     ```
+
+### B. Migrasi Persistensi Penuh ke Cloud Firestore (Anti-Crash Serverless)
+* **Masalah**: Pada `server.ts`, terdapat kode `fs.mkdirSync(SNAPSHOTS_DIR)` dan `fs.writeFileSync` ke folder `data/snapshots/` dan `data/bindings/`. Pada Vercel Serverless, filesystem bersifat read-only (`EROFS`) atau dihapus otomatis setiap kali lambda instance berakhir.
+* **Solusi Perbaikan**:
+  1. Alihkan persistensi `Daily Snapshots` dan `Transporter Bindings` untuk selalu membaca dan menulis ke **Cloud Firestore** sebagai sumber utama (*primary storage*).
+  2. Bungkus operasi filesystem lokal dengan blok `try-catch` yang aman agar tidak terjadi error fatal (*unhandled exception*) saat berjalan di serverless.
+
+### C. Pembuatan Konfigurasi `vercel.json`
+* **Solusi Perbaikan**: Buat file `vercel.json` di root proyek untuk mengatur routing API, SPA fallback, serta header keamanan dan PWA:
+  ```json
+  {
+    "version": 2,
+    "framework": "vite",
+    "rewrites": [
+      {
+        "source": "/api/(.*)",
+        "destination": "/api/index.ts"
+      },
+      {
+        "source": "/((?!api/|sw.js|manifest.webmanifest|icons/).*)",
+        "destination": "/index.html"
+      }
+    ]
+  }
+  ```
+
+### D. Standarisasi Pengambilan Kredensial via Environment Variables
+* **Masalah**: `firebase-applet-config.json` adalah file lokal yang tidak boleh sembarangan di-push ke repositori publik jika menggunakan GitHub publik.
+* **Solusi Perbaikan**:
+  1. Perbarui loader Firebase di backend agar memprioritaskan `process.env.FIREBASE_CONFIG` (dalam format JSON string) atau variabel individual:
+     - `FIREBASE_PROJECT_ID`
+     - `FIREBASE_DATABASE_ID`
+     - `FIREBASE_API_KEY`
+     - `FIREBASE_AUTH_DOMAIN`
+  2. Tetap sediakan pembacaan file `firebase-applet-config.json` sebagai fallback jika file tersedia di disk.
+  3. Pastikan `APPSHEET_APP_ID`, `APPSHEET_ACCESS_KEY`, dan `APPSHEET_TABLE` terbaca langsung dari `process.env`.
+
+### E. Otorisasi Domain di Firebase Authentication Console
+* **Masalah**: Google Sign-In akan menolak login (`auth/unauthorized-domain`) jika domain aplikasi belum didaftarkan di Firebase Console.
+* **Solusi**:
+  1. Saat aplikasi sudah dideploy ke Vercel dan mendapatkan domain (contoh: `siapin-transporter.vercel.app`), pengguna cukup membuka **Firebase Console** -> **Authentication** -> **Settings** -> **Authorized Domains**.
+  2. Tambahkan domain Vercel tersebut ke daftar domain yang diizinkan.
+
+---
+
+## 4. Panduan Langkah Deployment ke Vercel (Step-by-Step)
+
+```
+┌─────────────────────────┐
+│ 1. Git Push ke GitHub   │
+└────────────┬────────────┘
+             ▼
+┌─────────────────────────┐
+│ 2. Import di Vercel     │ ──► Framework Preset: Vite
+└────────────┬────────────┘
+             ▼
+┌─────────────────────────┐
+│ 3. Isi Environment Vars │ ──► FIREBASE_CONFIG, APPSHEET_APP_ID, APPSHEET_ACCESS_KEY
+└────────────┬────────────┘
+             ▼
+┌─────────────────────────┐
+│ 4. Deploy & Verifikasi  │ ──► Tambahkan domain *.vercel.app ke Firebase Auth Console
+└─────────────────────────┘
+```
+
+### Daftar Variabel Lingkungan di Vercel Dashboard:
+| Nama Variabel | Keterangan | Nilai Contoh |
 | :--- | :--- | :--- |
-| **Izin OAuth** | Hanya minta scope standar (`email`, `profile`) | Membebaskan aplikasi dari Error 403 Google Verification selamanya |
-| **Penyimpanan Database** | Tetap menggunakan Cloud Firestore `transporter_bindings` | Keamanan dan validasi penguncian akun tetap 100% terpusat dan andal |
-| **Fallback Manual** | Disediakan jika popup diblokir oleh browser HP | Menghindari kegagalan registrasi pada peramban mobile (seperti in-app browser) |
-| **Google Sheets Service** | Scope sheets dipisahkan ke fungsi khusus admin | Tidak membebani pengguna transporter lapangan dengan izin berbahaya |
+| `FIREBASE_CONFIG` | Konfigurasi JSON Firebase | `{"projectId":"...","firestoreDatabaseId":"..."}` |
+| `APPSHEET_APP_ID` | ID Aplikasi AppSheet | `8b71fdfd-7dcb-4c5f-944f-8491406b0c5a` |
+| `APPSHEET_ACCESS_KEY`| Access Key REST API AppSheet | `V2-X58uw-q1bpM-xtN9s-cz1XH-...` |
+| `APPSHEET_TABLE` | Nama Tabel AppSheet | `MD to Dealer 2` |
 
 ---
 
-## 4. Technical Architecture & Implementation Steps
+## 5. Rencana Eksekusi Kode di Proyek
 
-### Step 1: Modifikasi `src/services/googleAuth.ts`
-- Hapus penambahan scope `https://www.googleapis.com/auth/spreadsheets` dan `https://www.googleapis.com/auth/drive.file` pada provider utama.
-- Konfigurasikan `GoogleAuthProvider` murni dengan parameter `prompt: 'select_account'` untuk menampilkan seluruh akun di HP tanpa trigger verifikasi privasi Google.
-- Sediakan provider terpisah jika fitur ekspor admin Google Sheets spesifik membutuhkan izin tambahan di kemudian hari.
-
-### Step 2: Pembaruan `src/components/LoginScreen.tsx`
-- Tambahkan penanganan kondisi error `auth/popup-blocked` atau `auth/cancelled-popup-request`.
-- Sediakan toggle opsi darurat: `showManualEmailInput` jika pengguna mengalami kendala teknis pada browser HP.
-- Pastikan email manual yang dimasukkan tetap melalui validasi Firestore yang sama persis (`checkTransporterBinding` dan `getTransporterBinding`).
-
-### Step 3: Verifikasi Kompilasi & Pengujian
-- Jalankan `npm run lint` dan `npm run build` untuk memastikan tidak ada kesalahan tipe.
-- Uji alur klik "Hubungkan Google": pastikan popup langsung menampilkan daftar akun tanpa pesan "Access blocked: gen-lang-client...".
-
----
-
-## 5. Security & Boundary Hardening
-
-1. **Email Format Validation**: Sanitasi ketat untuk email yang diinput manual (wajib format email valid dan diubah ke huruf kecil).
-2. **Firestore Locking Persistence**: Email manual tidak dapat melewati penguncian Firestore; jika sudah terikat ke transporter/depo lain, sistem tetap melempar penolakan 403.
-3. **No Sensitive Tokens in LocalStorage**: Hanya data identitas profil yang disimpan secara lokal.
-
----
-
-## 6. Acceptance Criteria & Test Plan
-
-1. **Uji Bebas Error 403**:
-   - Klik "Hubungkan Google" di perangkat HP maupun browser desktop.
-   - Popup Google terbuka langsung dengan daftar akun Google tanpa menampilkan pesan "Access blocked / Error 403: access_denied".
-2. **Uji Pemilihan Akun**:
-   - Memilih salah satu akun Google berhasil mengekstrak email dan mengarahkan ke Step 2 (Pilih Transporter & Depo).
-3. **Uji Penguncian Akun**:
-   - Akun yang sudah didaftarkan pada satu Transporter & Depo tetap ditolak jika dicoba didaftarkan kembali ke vendor/depo lain.
-4. **Uji Opsi Darurat Manual**:
-   - Jika toggle manual email dipilih, pengguna dapat menginput email dan melanjutkan proses registrasi dengan validasi Firestore yang sama.
+Setelah rencana ini disetujui, langkah teknis yang akan langsung diimplementasikan adalah:
+1. **Membuat `src/server/app.ts`**: Mengekstrak aplikasi Express dari `server.ts` agar bersih dan dapat digunakan ganda (dual-target: lokal & serverless).
+2. **Membuat `api/index.ts`**: Menjadi serverless entry point resmi Vercel.
+3. **Memperbarui `server.ts`**: Mengimpor `app` dari `src/server/app.ts` untuk server lokal di AI Studio.
+4. **Membuat `vercel.json`**: Menentukan routing API dan SPA rewrites.
+5. **Menambahkan file `.env.example`**: Dokumentasi lengkap variabel lingkungan untuk kemudahan copy-paste ke Vercel Dashboard.
+6. **Validasi Kompilasi & Build**: Memastikan `npm run build` dan TypeScript linter lulus 100% tanpa error.

@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana penyelesaian Error 403 (access_denied) Google Verification dengan menghapus izin sensitif Google Sheets/Drive pada GoogleAuthProvider sehingga bebas verifikasi untuk seluruh akun Google, serta penambahan opsi darurat input email manual jika popup Google di perangkat mengalami kendala.",
-  "updatedAt":  "2026-10-11T11:40:06.179395504Z",
+  "summary":  "Rencana komprehensif penyesuaian dan panduan deployment aplikasi SIAPIN ke Vercel tanpa mengubah fitur atau fungsi yang ada. Menjelaskan kelayakan (100% Bisa), adaptasi Express ke Vercel Serverless Function via vercel.json, migrasi penyimpanan lokal ke Cloud Firestore cloud, penataan Environment Variables, serta otorisasi domain Vercel pada Firebase Authentication.",
+  "updatedAt":  "2026-10-12T11:47:26.435656538Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
