@@ -1,8 +1,10 @@
+# Dependencies & Build Output
 node_modules/
-build/
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
+
+# Sensitive Configs & Credentials
+firebase-applet-config.json
+.env
+.env.*
 !.env.example
+*.local
