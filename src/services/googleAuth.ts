@@ -7,7 +7,25 @@ import {
   User,
   signOut,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+let firebaseConfig: any = {
+  projectId: "gen-lang-client-0286495500",
+  appId: "1:899690953368:web:2d6e7aa901dda1363f6eed",
+  apiKey: "AIzaSyBhfJMosbTICiAEXvxnnTxyTsYRJm61tnM",
+  authDomain: "gen-lang-client-0286495500.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-siapin-b6acd525-7284-4786-bbde-e0c31404bd65",
+  storageBucket: "gen-lang-client-0286495500.firebasestorage.app",
+  messagingSenderId: "899690953368",
+  oAuthClientId: "899690953368-qa2vafuauke33qu90mr41m7dgij8lc34.apps.googleusercontent.com",
+};
+
+try {
+  // If FIREBASE_CONFIG is injected as Vite env
+  if (import.meta.env.VITE_FIREBASE_CONFIG) {
+    firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
+  }
+} catch {
+  // Use embedded default config
+}
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
