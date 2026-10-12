@@ -325,83 +325,92 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // Complete Transporter Registration with Strict Firestore Binding
   const handleCompleteRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!connectedEmail) return;
+    if (!connectedEmail) {
+      setRegError('Email Google belum terdeteksi. Silakan klik "Ganti Akun" untuk memilih akun kembali.');
+      return;
+    }
 
     setRegError('');
     setIsConnectingGoogle(true);
 
-    const email = connectedEmail.trim().toLowerCase();
-    const vendorCode = selectedVendor;
-    const vendorName = TRANSPORTER_NAMES[vendorCode] || 'PT. Tunas Muda';
-    const depoName = selectedDepo;
-
-    // 1. Cek validasi penolakan ke server & Cloud Firestore
-    const checkRes = await checkTransporterBinding(email, vendorCode, depoName);
-    if (!checkRes.allowed && checkRes.existingBinding) {
-      setIsConnectingGoogle(false);
-      setRejectionModal({
-        isOpen: true,
-        email,
-        existingTransporter: checkRes.existingBinding.namaTransporter || checkRes.existingBinding.kodeTransporter,
-        existingDepo: checkRes.existingBinding.depo,
-        existingRecord: checkRes.existingBinding,
-        message: checkRes.message,
-      });
-      return;
-    }
-
-    // 2. Simpan pengikatan permanen di Cloud Firestore
-    const saveRes = await saveTransporterBinding({
-      email,
-      googleUid: googleUser?.uid || '',
-      displayName: googleUser?.displayName || '',
-      kodeTransporter: vendorCode,
-      namaTransporter: vendorName,
-      depo: depoName,
-    });
-
-    if (saveRes.rejected && saveRes.existingBinding) {
-      setIsConnectingGoogle(false);
-      setRejectionModal({
-        isOpen: true,
-        email,
-        existingTransporter: saveRes.existingBinding.namaTransporter || saveRes.existingBinding.kodeTransporter,
-        existingDepo: saveRes.existingBinding.depo,
-        existingRecord: saveRes.existingBinding,
-        message: saveRes.message,
-      });
-      return;
-    }
-
-    if (!saveRes.success) {
-      setIsConnectingGoogle(false);
-      setRegError(saveRes.message || 'Gagal menyimpan pendaftaran akun.');
-      return;
-    }
-
-    // 3. Berhasil: Simpan ke state lokal & login
-    const newTransporter: UserRecord = {
-      email,
-      namaTransporter: vendorName,
-      kodeTransporter: vendorCode,
-      depo: depoName,
-      role: 'transporter',
-    };
-
     try {
-      localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(newTransporter));
-      const stored = localStorage.getItem(STORAGE_REGISTERED_USERS);
-      const list: UserRecord[] = stored ? JSON.parse(stored) : [];
-      const filtered = list.filter((u) => u.email !== newTransporter.email);
-      filtered.unshift(newTransporter);
-      localStorage.setItem(STORAGE_REGISTERED_USERS, JSON.stringify(filtered));
-      setRegisteredTransporter(newTransporter);
-    } catch (err) {
-      console.warn('Failed to save transporter account in localStorage', err);
-    }
+      const email = connectedEmail.trim().toLowerCase();
+      const vendorCode = selectedVendor;
+      const vendorName = TRANSPORTER_NAMES[vendorCode] || 'PT. Tunas Muda';
+      const depoName = selectedDepo;
 
-    setIsConnectingGoogle(false);
-    onLogin(newTransporter);
+      // 1. Cek validasi penolakan ke server & Cloud Firestore
+      const checkRes = await checkTransporterBinding(email, vendorCode, depoName);
+      if (!checkRes.allowed && checkRes.existingBinding) {
+        setIsConnectingGoogle(false);
+        setRejectionModal({
+          isOpen: true,
+          email,
+          existingTransporter: checkRes.existingBinding.namaTransporter || checkRes.existingBinding.kodeTransporter,
+          existingDepo: checkRes.existingBinding.depo,
+          existingRecord: checkRes.existingBinding,
+          message: checkRes.message,
+        });
+        return;
+      }
+
+      // 2. Simpan pengikatan permanen di Cloud Firestore
+      const saveRes = await saveTransporterBinding({
+        email,
+        googleUid: googleUser?.uid || '',
+        displayName: googleUser?.displayName || '',
+        kodeTransporter: vendorCode,
+        namaTransporter: vendorName,
+        depo: depoName,
+      });
+
+      if (saveRes.rejected && saveRes.existingBinding) {
+        setIsConnectingGoogle(false);
+        setRejectionModal({
+          isOpen: true,
+          email,
+          existingTransporter: saveRes.existingBinding.namaTransporter || saveRes.existingBinding.kodeTransporter,
+          existingDepo: saveRes.existingBinding.depo,
+          existingRecord: saveRes.existingBinding,
+          message: saveRes.message,
+        });
+        return;
+      }
+
+      if (!saveRes.success) {
+        setIsConnectingGoogle(false);
+        setRegError(saveRes.message || 'Gagal menyimpan pendaftaran akun.');
+        return;
+      }
+
+      // 3. Berhasil: Simpan ke state lokal & login
+      const newTransporter: UserRecord = {
+        email,
+        namaTransporter: vendorName,
+        kodeTransporter: vendorCode,
+        depo: depoName,
+        role: 'transporter',
+      };
+
+      try {
+        localStorage.setItem(STORAGE_TRANSPORTER_ACCOUNT, JSON.stringify(newTransporter));
+        const stored = localStorage.getItem(STORAGE_REGISTERED_USERS);
+        const list: UserRecord[] = stored ? JSON.parse(stored) : [];
+        const filtered = list.filter((u) => u.email !== newTransporter.email);
+        filtered.unshift(newTransporter);
+        localStorage.setItem(STORAGE_REGISTERED_USERS, JSON.stringify(filtered));
+        setRegisteredTransporter(newTransporter);
+      } catch (err) {
+        console.warn('Failed to save transporter account in localStorage', err);
+      }
+
+      setIsConnectingGoogle(false);
+      onLogin(newTransporter);
+    } catch (unexpectedError: any) {
+      console.error('Pendaftaran gagal tidak terduga:', unexpectedError);
+      setIsConnectingGoogle(false);
+      setRegError(unexpectedError?.message || 'Terjadi kesalahan sistem saat memproses pendaftaran. Silakan coba lagi.');
+    }
   };
 
   // Reset connected transporter account from phone storage
@@ -991,6 +1000,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 /* STEP 2: PILIH PERUSAHAAN & DEPO OPERASIONAL */
                 <form onSubmit={handleCompleteRegistration} className="space-y-3.5 pt-1">
                   
+                  {/* Banner Pesan Error Bila Ada di Step 2 */}
+                  {regError && (
+                    <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-left flex items-start gap-2 animate-in fade-in duration-150">
+                      <div className="w-4 h-4 rounded-full bg-[#E50914] text-white flex items-center justify-center shrink-0 text-[10px] font-bold mt-0.5">!</div>
+                      <div className="text-xs text-red-800 leading-relaxed font-medium">
+                        {regError}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Banner Akun Google Terverifikasi */}
                   <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2.5">
                     <div className="w-6 h-6 rounded-full bg-white flex items-center justify-center shadow-2xs shrink-0">
@@ -1042,16 +1061,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <div className="pt-2 flex gap-2.5">
                     <button
                       type="button"
+                      disabled={isConnectingGoogle}
                       onClick={() => setRegStep(1)}
-                      className="h-11 px-3.5 rounded-xl border border-slate-300 text-slate-700 font-semibold text-xs cursor-pointer hover:bg-slate-50 transition"
+                      className="h-11 px-3.5 rounded-xl border border-slate-300 text-slate-700 font-semibold text-xs cursor-pointer hover:bg-slate-50 transition disabled:opacity-50"
                     >
                       Ganti Akun
                     </button>
                     <button
                       type="submit"
-                      className="flex-1 h-11 rounded-xl bg-[#E50914] hover:bg-red-700 active:bg-red-800 text-white font-semibold text-xs shadow-sm cursor-pointer transition flex items-center justify-center gap-1.5"
+                      disabled={isConnectingGoogle}
+                      className="flex-1 h-11 rounded-xl bg-[#E50914] hover:bg-red-700 active:bg-red-800 text-white font-semibold text-xs shadow-sm cursor-pointer transition flex items-center justify-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
                     >
-                      Selesaikan Pendaftaran →
+                      {isConnectingGoogle ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Menyimpan...</span>
+                        </>
+                      ) : (
+                        <span>Selesaikan Pendaftaran →</span>
+                      )}
                     </button>
                   </div>
 
